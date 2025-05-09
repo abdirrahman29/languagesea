@@ -1,0 +1,248 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// User model for authentication
+model User {
+  id             String          @id @default(cuid())
+  name           String?
+  email          String          @unique
+  emailVerified  DateTime?
+  image          String?
+  password       String?
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+  level          String          @default("A1") // Current CEFR level
+  savedTexts     SavedText[]
+  practicedWords PracticedWord[]
+  userProgress   UserProgress?
+}
+
+// User progress tracking
+model UserProgress {
+  id                String   @id @default(cuid())
+  userId            String   @unique
+  user              User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  verbsLearned      Int      @default(0)
+  nounsLearned      Int      @default(0)
+  adjectivesLearned Int      @default(0)
+  textsProcessed    Int      @default(0)
+  lastActive        DateTime @default(now())
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+}
+
+// Verb model
+model Verb {
+  id                      Int             @id @default(autoincrement())
+  baseForm                String
+  level                   String
+  infinitive              String?
+  infinitiveId            Int?
+  coOccurrenceBitmask     String?
+  bigramsAndPositionHex   String?
+  dateAdded               DateTime        @default(now())
+  conjugations            VerbConjugation[]
+  practicedBy             PracticedWord[]
+  extractedInTexts        ExtractedWord[]
+}
+
+// Verb conjugation model
+model VerbConjugation {
+  id          String  @id @default(cuid())
+  verbId      Int
+  verb        Verb    @relation(fields: [verbId], references: [id], onDelete: Cascade)
+  tense       String  // "present", "past"
+  mood        String  // "indicative", "subjunctive"
+  number      String  // "SG", "PL"
+  person      String  // "1", "2", "3"
+  form        String
+  formId      Int?
+}
+
+// Noun model
+model Noun {
+  id                      Int             @id @default(autoincrement())
+  baseForm                String
+  level                   String
+  gender                  String?         // "MASC", "FEM", "NEUT"
+  coOccurrenceBitmask     String?
+  bigramsAndPositionHex   String?
+  dateAdded               DateTime        @default(now())
+  cases                   NounCase[]
+  practicedBy             PracticedWord[]
+  extractedInTexts        ExtractedWord[]
+}
+
+// Noun case model
+model NounCase {
+  id          String  @id @default(cuid())
+  nounId      Int
+  noun        Noun    @relation(fields: [nounId], references: [id], onDelete: Cascade)
+  case        String  // "NOM", "ACC", "DAT", "GEN"
+  gender      String  // "MASC", "FEM", "NEUT"
+  number      String  // "SG", "PL"
+  form        String
+  formId      Int?
+}
+
+// Adjective model
+model Adjective {
+  id                      Int                 @id @default(autoincrement())
+  baseForm                String
+  level                   String
+  coOccurrenceBitmask     String?
+  bigramsAndPositionHex   String?
+  dateAdded               DateTime            @default(now())
+  declensions             AdjectiveDeclension[]
+  comparativeForms        AdjectiveComparison[]
+  practicedBy             PracticedWord[]
+  extractedInTexts        ExtractedWord[]
+}
+
+// Adjective declension model
+model AdjectiveDeclension {
+  id          String    @id @default(cuid())
+  adjectiveId Int
+  adjective   Adjective @relation(fields: [adjectiveId], references: [id], onDelete: Cascade)
+  case        String    // "NOM", "ACC", "DAT", "GEN"
+  gender      String    // "MASC", "FEM", "NEUT"
+  number      String    // "SG", "PL"
+  form        String
+  formId      Int?
+}
+
+// Adjective comparison model
+model AdjectiveComparison {
+  id          String    @id @default(cuid())
+  adjectiveId Int
+  adjective   Adjective @relation(fields: [adjectiveId], references: [id], onDelete: Cascade)
+  type        String    // "comparative", "superlative"
+  form        String
+  example     String?
+}
+
+// Saved text model
+model SavedText {
+  id            Int      @id @default(autoincrement())
+  userId       String
+  user         User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title        String
+  content      String          @db.Text
+  level        String
+  excerpt      String?         @db.Text
+  wordCount    Int
+  readingTime  Int
+  dateAdded    DateTime        @default(now())
+  extractedWords ExtractedWord[]
+  stats        TextStats?
+}
+
+// Text statistics model
+model TextStats {
+  id                  String    @id @default(cuid())
+  savedTextId         Int         @unique
+  savedText           SavedText @relation(fields: [savedTextId], references: [id], onDelete: Cascade)
+  totalWords          Int
+  verbs               Int
+  nouns               Int
+  adjectives          Int
+  adverbs             Int
+  newWords            Int
+  practicedWords      Int
+  knownFromOtherTexts Int
+  levelA1             Int
+  levelA2             Int
+  levelB1             Int
+  levelB2Plus         Int
+}
+
+// Extracted word model
+model ExtractedWord {
+  id            String    @id @default(cuid())
+  savedTextId   Int     
+  savedText     SavedText @relation(fields: [savedTextId], references: [id], onDelete: Cascade)
+  baseForm      String
+  originalForm  String?
+  type          String    // "VERB", "NOUN", "ADJECTIVE", "ADVERB"
+  level         String?
+  gender        String?
+  case          String?
+  tense         String?
+  translation   String?
+  isNew         Boolean   @default(true)
+  sentence      String?   @db.Text
+  sentenceTranslation String? @db.Text
+  isRepeat            Boolean   @default(false)  // Add this field
+  dateAdded DateTime @default(now())
+  // References to the actual word entities
+  verbId        Int?
+  verb          Verb?     @relation(fields: [verbId], references: [id])
+  nounId        Int?
+  noun          Noun?     @relation(fields: [nounId], references: [id])
+  adjectiveId   Int?
+  adjective     Adjective? @relation(fields: [adjectiveId], references: [id])
+  isKnown  Boolean  @default(false)
+
+}
+
+// Practiced word model
+model PracticedWord {
+  id          String    @id @default(cuid())
+  userId      String
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  baseForm    String
+  type        String    // "VERB", "NOUN", "ADJECTIVE", "ADVERB"
+  practiced   Boolean   @default(false)
+  lastPracticed DateTime?
+  timesCorrect Int      @default(0)
+  timesWrong   Int      @default(0)
+  
+  // References to the actual word entities
+  verbId      Int?
+  verb        Verb?     @relation(fields: [verbId], references: [id])
+  nounId      Int?
+  noun        Noun?     @relation(fields: [nounId], references: [id])
+  adjectiveId Int?
+  adjective   Adjective? @relation(fields: [adjectiveId], references: [id])
+  
+  @@unique([userId, baseForm, type])
+}
+
+// Word collocation model
+model WordCollocation {
+  id          String   @id @default(cuid())
+  firstWord   String
+  secondWord  String
+  strength    Float    // 0-1 value representing how strong the collocation is
+  example     String?
+  themes      String[] // Categories/themes this collocation belongs to
+}
+
+// Theme category model
+model ThemeCategory {
+  id          String   @id @default(cuid())
+  name        String
+  description String?
+  words       ThemeCategoryWord[]
+}
+
+// Theme category word model
+model ThemeCategoryWord {
+  id              String        @id @default(cuid())
+  themeCategoryId String
+  themeCategory   ThemeCategory @relation(fields: [themeCategoryId], references: [id], onDelete: Cascade)
+  text            String
+  type            String        // "VERB", "NOUN", "ADJECTIVE", "ADVERB"
+  level           String
+  translation     String
+  gender          String?
+}
