@@ -11,17 +11,32 @@ services:
       - "5437:5432"
     volumes:
       - postgres_data7:/var/lib/postgresql/data
+    networks:  # Add network
+      - all_proxy 
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U abdi"]
       interval: 5s
       timeout: 5s
       retries: 5
   languagesea:
-    image: abdirrahman29/languagesea:v1
-    ports:
-      - '3006:3000'
+    image: abedrahman/languagesea:v1
+    
     environment:
       - DATABASE_URL=postgresql://abdi:abdi@localhost:5437/german_vocab
+    networks:
+      - all_proxy 
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.language.entrypoints=websecure"
+      - "traefik.http.routers.language.rule=Host(`language.nahjuna.com`)"
+      - "traefik.docker.network=all_proxy"
+      - "traefik.http.middlewares.language-headers.headers.customrequestheaders.Host=language.nahjuna.com"
+
+      - "traefik.http.routers.language.entrypoints=https"
+      - "traefik.http.routers.language.tls=true"
+
+      - "traefik.http.routers.language.tls.certresolver=letsencrypt"
+      - "traefik.http.services.language.loadbalancer.server.port=3000"
     
     deploy:
       resources:
@@ -34,3 +49,6 @@ services:
 
 volumes:
   postgres_data7:
+networks:  # Add this section
+  all_proxy :
+    external: true

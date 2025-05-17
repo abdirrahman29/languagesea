@@ -9,9 +9,8 @@ export async function POST(req: NextRequest) {
     if (!text) {
       return NextResponse.json({ error: "Text is required" }, { status: 400 })
     }
-         // @ts-ignore
 
-    const result = await processGermanText(text, title,userId)
+    const result = await processGermanText(text, title)
 
     return NextResponse.json(result)
   } catch (error) {

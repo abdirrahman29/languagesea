@@ -54,35 +54,88 @@ export const authOptions: NextAuthOptions = {
     }),
   ],
   callbacks: {
-    async session({ session, token }) {
-      if (token) {
-        session.user.id = token.id
-        session.user.name = token.name
-        session.user.email = token.email
-        session.user.image = token.picture
-      }
-      return session
-    },
-    async jwt({ token, user }) {
-      const prismaUser = await prisma.user.findFirst({
-        where: {
-          email: token.email,
-        },
-      })
-
-      if (!prismaUser) {
-        if (user) {
-          token.id = user.id
+    async redirect({ url, baseUrl }) {
+      // Simplified redirect handler
+      try {
+        const parsedUrl = new URL(url);
+        // Only allow redirects within the same domain
+        if (parsedUrl.origin === baseUrl) {
+          return url;
         }
-        return token
+      } catch (error) {
+        // Handle relative URLs
+        if (url.startsWith("/")) {
+          return `${baseUrl}${url}`;
+        }
       }
-
+      // Default to home page for invalid URLs
+      return baseUrl;
+    },
+    
+    async session({ session, token }) {
+      // Ensure all required session fields are populated
       return {
-        id: prismaUser.id,
-        name: prismaUser.name,
-        email: prismaUser.email,
-        picture: prismaUser.image,
+        ...session,
+        user: {
+          ...session.user,
+          id: token.id as string,
+          name: token.name,
+          email: token.email,
+          image: token.picture,
+          role: token.role // Add any additional fields you need
+        }
+      };
+    },
+  
+    async jwt({ token, user, trigger, session }) {
+      // Handle user creation/update on sign in
+      if (trigger === "signIn" && user) {
+        const prismaUser = await prisma.user.upsert({
+          where: { email: user.email! },
+          update: {
+            name: user.name,
+            image: user.image
+          },
+          create: {
+            email: user.email!,
+            name: user.name || "",
+            image: user.image || ""
+          }
+        });
+  
+        return {
+          ...token,
+          id: prismaUser.id,
+          name: prismaUser.name,
+          email: prismaUser.email,
+          picture: prismaUser.image,
+          role: prismaUser.role
+        };
       }
+  
+      // Handle session updates
+      if (trigger === "update" && session) {
+        return { ...token, ...session.user };
+      }
+  
+      // Return existing token for other cases
+      return token;
+    }
+  },
+  cookies: {
+    sessionToken: {
+      name: `next-auth.session-token`,
+      options: {
+        httpOnly: true,
+        sameSite: "lax",
+        path: "/",
+        secure: true, // Set to true if using HTTPS
+        domain: ".nahjuna.com", // Your server IP
+      },
     },
   },
+              // @ts-ignore
+
+  trustHost: true,
+  debug: process.env.NODE_ENV === "development",
 }
