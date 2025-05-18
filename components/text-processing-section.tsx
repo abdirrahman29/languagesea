@@ -32,12 +32,7 @@ export default function TextProcessingSection() {
   const [isSaving, setIsSaving] = useState(false)
   const [saveSuccess, setSaveSuccess] = useState(false)
 
-  useEffect(() => {
-    // Load sample text on initial render
-    if (!text) {
-      setText(SAMPLE_TEXT)
-    }
-  }, [text])
+ 
 
   const handleProcessText = async () => {
     if (!text.trim()) {
