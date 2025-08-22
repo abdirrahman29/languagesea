@@ -1,0 +1,25 @@
+name: Build and Publish Abood image to Docker Hub
+on:
+  push:
+    branches: [ main ]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Log in to Docker Hub
+      run: echo "${{ secrets.DOCKERHUB_TOKEN }}" | docker login -u "${{ secrets.DOCKERHUB_USERNAME }}" --password-stdin
+    
+    - name: Create .env file
+      run: |
+        echo "DATABASE_URL=${{ secrets.DATABASE_URL }}" >> .env
+        echo "NEXTAUTH_SECRET=${{ secrets.NEXTAUTH_SECRET }}" >> .env
+        echo "GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY }}" >> .env
+   
+    
+    - name: Build and push the Docker image
+      run: |
+        TAG=${{ secrets.DOCKERHUB_USERNAME }}/languagesea:v2.0
+        docker build . -t $TAG
+        docker push $TAG

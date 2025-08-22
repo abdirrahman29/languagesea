@@ -122,6 +122,7 @@ export const authOptions: NextAuthOptions = {
       return token;
     }
   },
+
   cookies: {
     sessionToken: {
       name: `next-auth.session-token`,
@@ -134,6 +135,7 @@ export const authOptions: NextAuthOptions = {
       },
     },
   },
+  
               // @ts-ignore
 
   trustHost: true,

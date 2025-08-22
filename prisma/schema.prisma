@@ -34,6 +34,7 @@ model UserProgress {
   verbsLearned      Int      @default(0)
   nounsLearned      Int      @default(0)
   adjectivesLearned Int      @default(0)
+  adverbsLearned    Int      @default(0)  // Added adverbs tracking
   textsProcessed    Int      @default(0)
   lastActive        DateTime @default(now())
   createdAt         DateTime @default(now())
@@ -130,6 +131,30 @@ model AdjectiveComparison {
   example     String?
 }
 
+// NEW: Adverb model
+model Adverb {
+  id                      Int             @id @default(autoincrement())
+  baseForm                String
+  level                   String
+  type                    String?         // "manner", "time", "place", "degree", etc.
+  coOccurrenceBitmask     String?
+  bigramsAndPositionHex   String?
+  dateAdded               DateTime        @default(now())
+  comparativeForms        AdverbComparison[]
+  practicedBy             PracticedWord[]
+  extractedInTexts        ExtractedWord[]
+}
+
+// NEW: Adverb comparison model (for adverbs that can be compared like "schnell", "schneller", "am schnellsten")
+model AdverbComparison {
+  id          String  @id @default(cuid())
+  adverbId    Int
+  adverb      Adverb  @relation(fields: [adverbId], references: [id], onDelete: Cascade)
+  type        String  // "comparative", "superlative"
+  form        String
+  example     String?
+}
+
 // Saved text model
 model SavedText {
   id            Int      @id @default(autoincrement())
@@ -181,7 +206,7 @@ model ExtractedWord {
   isNew         Boolean   @default(true)
   sentence      String?   @db.Text
   sentenceTranslation String? @db.Text
-  isRepeat            Boolean   @default(false)  // Add this field
+  isRepeat            Boolean   @default(false)
   dateAdded DateTime @default(now())
   // References to the actual word entities
   verbId        Int?
@@ -190,8 +215,9 @@ model ExtractedWord {
   noun          Noun?     @relation(fields: [nounId], references: [id])
   adjectiveId   Int?
   adjective     Adjective? @relation(fields: [adjectiveId], references: [id])
+  adverbId      Int?      // NEW: Added adverb reference
+  adverb        Adverb?   @relation(fields: [adverbId], references: [id])  // NEW: Added adverb relation
   isKnown  Boolean  @default(false)
-
 }
 
 // Practiced word model
@@ -213,6 +239,8 @@ model PracticedWord {
   noun        Noun?     @relation(fields: [nounId], references: [id])
   adjectiveId Int?
   adjective   Adjective? @relation(fields: [adjectiveId], references: [id])
+  adverbId    Int?      // NEW: Added adverb reference
+  adverb      Adverb?   @relation(fields: [adverbId], references: [id])  // NEW: Added adverb relation
   
   @@unique([userId, baseForm, type])
 }

@@ -12,6 +12,7 @@
     "@auth/prisma-adapter": "^2.9.0",
     "@emotion/is-prop-valid": "latest",
     "@google-cloud/translate": "^9.0.1",
+    "@google/generative-ai": "^0.24.1",
     "@hookform/resolvers": "^3.9.1",
     "@prisma/client": "^6.7.0",
     "@radix-ui/react-accordion": "1.2.2",

@@ -612,6 +612,17 @@ export async function getFrequencyDistribution(userId: string) {
 export async function getDashboardData(userId: string) {
  
       try {
+        const user = await prisma.user.findUnique({
+          where: { id: userId },
+          include: {
+            userProgress: true,
+          }
+        })
+    
+        if (!user) {
+          throw new Error("User not found")
+        }
+    
         // Get level distribution counts
         const levelCounts = await Promise.all([
           prisma.extractedWord.count({

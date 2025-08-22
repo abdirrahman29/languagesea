@@ -1,45 +1,7 @@
+// text-processor.ts - AI-powered German text processor with batch analysis
 import type { ProcessingResult } from "./types"
-import * as germanVerbData from "@/data/german_verb_conjugations.json"
 import { createTranslator } from "@/lib/translator"
 import { prisma } from "@/lib/db"
-
-// Load German vocabulary data from JSON
-const germanVocabulary = {
-  verbs: {} as Record<string, any>,
-  nouns: {} as Record<string, any>,
-  adjectives: {} as Record<string, any>,
-}
-
-// Parse the JSON data
-let vocabularyLoaded = false
-
-async function loadVocabularyData() {
-  if (vocabularyLoaded) return
-
-  try {
-    // In a real implementation with multiple files, we would load and merge them
-    // For now, we'll parse the single JSON file we have
-
-    // Process each entry in the JSON data
-    Object.entries(germanVerbData).forEach(([word, data]) => {
-      const wordData = data as any
-
-      // Determine the type of word based on its properties
-      if (wordData.present || wordData.past || wordData.imperative) {
-        germanVocabulary.verbs[word] = wordData
-      } else if (wordData.cases) {
-        germanVocabulary.nouns[word] = wordData
-      } else if (wordData.declensions || wordData.degrees) {
-        germanVocabulary.adjectives[word] = wordData
-      }
-    })
-
-    vocabularyLoaded = true
-  } catch (error) {
-    console.error("Error loading vocabulary data:", error)
-    throw new Error("Failed to load vocabulary data")
-  }
-}
 
 // Simple tokenizer function to split text into words and sentences
 function tokenizeText(text: string) {
@@ -61,6 +23,32 @@ function tokenizeText(text: string) {
     }
   })
 }
+
+// Map Gemini word types to our standardized types
+function normalizeWordType(geminiWordType: string): 'VERB' | 'NOUN' | 'ADJ' | 'ADVERB' {
+  const type = geminiWordType.toUpperCase()
+  
+  switch (type) {
+    case 'VERB':
+      return 'VERB'
+    case 'NOUN':
+      return 'NOUN'
+    case 'ADJECTIVE':
+      return 'ADJ'
+    case 'ADVERB':
+      return 'ADVERB'
+    // Map other types to closest equivalent or default to ADVERB
+    case 'PREPOSITION':
+    case 'CONJUNCTION':  
+    case 'PRONOUN':
+    case 'ARTICLE':
+    case 'DETERMINER':
+    case 'INTERJECTION':
+    default:
+      return 'ADVERB' // Default fallback for unhandled types
+  }
+}
+
 async function checkWordInDatabase(userId: string, baseForm: string, type: 'VERB' | 'NOUN' | 'ADJ' | 'ADVERB') {
   // Check both PracticedWord and ExtractedWord tables
   const [practiced, extracted] = await Promise.all([
@@ -84,11 +72,92 @@ async function checkWordInDatabase(userId: string, baseForm: string, type: 'VERB
 
   return practiced || extracted ? true : false
 }
+async function createOrFindThemes(extractedThemes: any[]): Promise<string[]> {
+  const themeIds: string[] = []
+  
+  for (const theme of extractedThemes) {
+    try {
+      // Try to find existing theme with similar name
+      let existingTheme = await prisma.themeCategory.findFirst({
+        where: {
+          name: {
+            contains: theme.name,
+            mode: 'insensitive'
+          }
+        }
+      })
+      
+      // If not found, create new theme
+      if (!existingTheme) {
+        existingTheme = await prisma.themeCategory.create({
+          data: {
+            name: theme.name,
+            description: theme.description
+          }
+        })
+        console.log(`Created new theme: ${theme.name}`)
+      }
+      
+      themeIds.push(existingTheme.id)
+    } catch (error) {
+      console.error(`Error creating/finding theme ${theme.name}:`, error)
+    }
+  }
+  
+  return themeIds
+}
+
+// NEW: Function to add words to themes automatically
+async function addWordToThemes(word: any, themes: string[], createdThemeIds: string[]) {
+  if (!themes || themes.length === 0 || themes.includes("General")) {
+    return // Skip general or undefined themes
+  }
+  
+  try {
+    for (const themeName of themes) {
+      // Find the theme by name
+      const theme = await prisma.themeCategory.findFirst({
+        where: {
+          name: {
+            contains: themeName,
+            mode: 'insensitive'
+          }
+        }
+      })
+      
+      if (theme) {
+        // Check if word already exists in this theme
+        const existingWord = await prisma.themeCategoryWord.findFirst({
+          where: {
+            themeCategoryId: theme.id,
+            text: word.baseForm,
+            type: word.type
+          }
+        })
+        
+        if (!existingWord) {
+          await prisma.themeCategoryWord.create({
+            data: {
+              themeCategoryId: theme.id,
+              text: word.baseForm,
+              type: word.type,
+              level: word.level || "A2",
+              translation: word.translation,
+              gender: word.gender || null
+            }
+          })
+          console.log(`Added word "${word.baseForm}" to theme "${themeName}"`)
+        }
+      }
+    }
+  } catch (error) {
+    console.error(`Error adding word ${word.baseForm} to themes:`, error)
+  }
+}
 const currentTextWordMap = new Map<string, number>();
 
 // Function to process German text
-export async function processGermanText(text: string, title: string,userId: string): Promise<ProcessingResult> {
-  await loadVocabularyData()
+export async function processGermanText(text: string, title: string, userId: string): Promise<ProcessingResult> {
   currentTextWordMap.clear();
 
   // Tokenize the text
@@ -119,445 +188,219 @@ export async function processGermanText(text: string, title: string,userId: stri
       adverbs: [],
     },
     sentences: [],
+    themes: [] // NEW: Add themes to result
   }
 
-  // Keep track of words already processed in this text
   const processedWords: Record<string, Record<string, number>> = {
     VERB: {},
     NOUN: {},
     ADJ: {},
-    ADV: {},
+    ADVERB: {},
   }
 
-  // Count total words
   result.stats.totalWords = tokenizedSentences.reduce((count, sentence) => count + sentence.words.length, 0)
 
-  // Process each sentence
-  for (const sentence of tokenizedSentences) {
-    const processedSentence = {
-      german: sentence.text,
-      english: await translateText(sentence.text),
-      words: [] as Array<{ baseForm: string; type: string }>,
-    }
+  const translator = createTranslator()
 
-    // Process each word in the sentence
-    for (const word of sentence.words) {
-      if (!word) continue
- 
-      // Check if it's a verb
+  // NEW: Extract themes from the text
+  console.log("Extracting themes from text...")
+  const themeExtraction = await translator.extractThemes(text, title)
+  result.themes = themeExtraction.themes
+  
+  // Create or find existing themes in database
+  const createdThemeIds = await createOrFindThemes(themeExtraction.themes)
+  
+  console.log("Identified themes:", result.themes.map(t => t.name).join(', '))
 
-      const verbMatch = findVerb(word)
-      if (verbMatch) {
-        result.stats.verbs++
+  // Batch process sentences
+  const BATCH_SIZE = 5
+  
+  for (let i = 0; i < tokenizedSentences.length; i += BATCH_SIZE) {
+    const sentenceBatch = tokenizedSentences.slice(i, i + BATCH_SIZE)
+    
+    const batchData = sentenceBatch.map(sentence => ({
+      text: sentence.text,
+      words: sentence.words.filter(word => word && word.length > 0)
+    }))
 
-        const baseForm = verbMatch.base_form
+    console.log(`Processing batch ${Math.floor(i/BATCH_SIZE) + 1}/${Math.ceil(tokenizedSentences.length/BATCH_SIZE)}`)
+
+    // Pass themes to the analysis for better categorization
+    const batchAnalysis = await translator.batchAnalyzeText(batchData, result.themes)
+
+    // Process each sentence in the batch
+    for (let j = 0; j < sentenceBatch.length; j++) {
+      const sentence = sentenceBatch[j]
+      const sentenceAnalysis = batchAnalysis.sentences[j]
+
+      const processedSentence = {
+        german: sentence.text,
+        english: sentenceAnalysis.sentenceTranslation,
+        words: [] as Array<{ baseForm: string; type: string }>,
+      }
+
+      // Process each word in the sentence
+      for (const word of sentence.words) {
+        if (!word) continue
+
+        const analysis = sentenceAnalysis.words[word]
+        if (!analysis) {
+          console.log(`No analysis found for word: "${word}"`)
+          continue
+        }
+
+        const baseForm = analysis.baseForm
+        const rawWordType = analysis.wordType
+        const wordType = normalizeWordType(rawWordType)
+        const level = analysis.level
+        const translation = analysis.translation
+        const themes = analysis.themes || ["General"] // NEW: Get themes
 
         // Check if this word has already been processed in this text
-        const isRepeat = processedWords.VERB[baseForm] !== undefined
-        const isKnown = await checkWordInDatabase(userId, baseForm, 'VERB')
         const currentCount = currentTextWordMap.get(baseForm) || 0;
-    const isRepeatInCurrentText = currentCount > 0;
-    currentTextWordMap.set(baseForm, currentCount + 1);
+        const isRepeatInCurrentText = currentCount > 0;
+        currentTextWordMap.set(baseForm, currentCount + 1);
+
+        // Check if word is known in database
+        const isKnown = await checkWordInDatabase(userId, baseForm, wordType)
         const isNew = !isKnown
-        
 
         // Update the counter for this word
-        processedWords.VERB[baseForm] = (processedWords.VERB[baseForm] || 0) + 1
+        processedWords[wordType][baseForm] = (processedWords[wordType][baseForm] || 0) + 1
 
-        // For client-side processing, assume all words are new initially
-        // The server will determine if they're actually new when saving
-
+        // NEW: Add word to themes if it's new and not a repeat
         if (isNew && !isRepeatInCurrentText) {
-          result.stats.newWords++
-          result.stats.newVerbs++
-          console.log(" verb", result.stats.newVerbs,word)
-
+          await addWordToThemes({
+            baseForm,
+            type: wordType,
+            level,
+            translation,
+            gender: analysis.grammaticalInfo?.gender
+          }, themes, createdThemeIds)
         }
-        else  if ( isRepeatInCurrentText) {
-          
-          console.log(" verb", result.stats.newVerbs,word)
 
+        // Update stats based on word type (existing logic)
+        switch (wordType) {
+          case 'VERB':
+            result.stats.verbs++
+            if (isNew && !isRepeatInCurrentText) {
+              result.stats.newWords++
+              result.stats.newVerbs++
+            } else if (!isNew) {
+              result.stats.existingWords++
+            }
+
+            result.extractedWords.verbs.push({
+              baseForm,
+              originalForm: word,
+              level,
+              tense: analysis.grammaticalInfo.tense || "unknown",
+              translation,
+              themes, // NEW: Add themes to extracted word
+              isNew,
+              isKnown,
+              isRepeat: isRepeatInCurrentText,
+              sentence: sentence.text,
+              sentenceTranslation: processedSentence.english,
+            })
+            break;
+
+          case 'NOUN':
+            result.stats.nouns++
+            if (isNew && !isRepeatInCurrentText) {
+              result.stats.newWords++
+              result.stats.newNouns++
+            } else if (!isNew) {
+              result.stats.existingWords++
+            }
+
+            result.extractedWords.nouns.push({
+              baseForm,
+              originalForm: word,
+              level,
+              gender: analysis.grammaticalInfo.gender || "unknown",
+              case: analysis.grammaticalInfo.case || "unknown",
+              translation,
+              themes, // NEW: Add themes to extracted word
+              isNew,
+              isKnown,
+              isRepeat: isRepeatInCurrentText,
+              sentence: sentence.text,
+              sentenceTranslation: processedSentence.english,
+            })
+            break;
+
+          case 'ADJ':
+            result.stats.adjectives++
+            if (isNew && !isRepeatInCurrentText) {
+              result.stats.newWords++
+              result.stats.newAdjectives++
+            } else if (!isNew) {
+              result.stats.existingWords++
+            }
+
+            result.extractedWords.adjectives.push({
+              baseForm,
+              originalForm: word,
+              level,
+              case: analysis.grammaticalInfo.case || "unknown",
+              translation,
+              themes, // NEW: Add themes to extracted word
+              isNew,
+              isKnown,
+              isRepeat: isRepeatInCurrentText,
+              sentence: sentence.text,
+              sentenceTranslation: processedSentence.english,
+            })
+            break;
+
+          case 'ADVERB':
+          default:
+            result.stats.adverbs++
+            if (isNew && !isRepeatInCurrentText) {
+              result.stats.newWords++
+            } else if (!isNew) {
+              result.stats.existingWords++
+            }
+
+            result.extractedWords.adverbs.push({
+              baseForm,
+              originalForm: word,
+              level,
+              type: analysis.grammaticalInfo.adverbType || rawWordType.toLowerCase() || "other",
+              translation,
+              themes, // NEW: Add themes to extracted word
+              isNew,
+              isKnown,
+              isRepeat: isRepeatInCurrentText,
+              sentence: sentence.text,
+              sentenceTranslation: processedSentence.english,
+            })
+            break;
         }
-        else {
-          result.stats.existingWords++  // Add this line
-          console.log(" exist", result.stats.existingWords,word)
 
-        }
-        
-      // console.log(" result.stats.existingWords++", result.stats.existingWords)
-        // Add to extracted verbs
-        result.extractedWords.verbs.push({
-          baseForm: verbMatch.base_form,
-          originalForm: word,
-          level: verbMatch.level,
-          tense: determineTense(word, verbMatch),
-          translation: await translateText(verbMatch.base_form),
-          isNew: isNew ,
-          // @ts-ignore
-          isKnown: isKnown, 
-          isRepeat: isRepeatInCurrentText,
-          sentence: sentence.text,
-          sentenceTranslation: await translateText(sentence.text),
-        })
-
-        // Add to sentence words
         processedSentence.words.push({
-          baseForm: verbMatch.base_form,
-          type: "VERB",
+          baseForm,
+          type: wordType,
         })
 
-        // Update level stats
-        updateLevelStats(result.stats, verbMatch.level)
-
-        continue
+        updateLevelStats(result.stats, level)
       }
 
-      // Check if it's a noun
-      const nounMatch = findNoun(word)
-      if (nounMatch) {
-        result.stats.nouns++
-
-        const baseForm = nounMatch.base_form
-
-        // Check if this word has already been processed in this text
-        const isRepeat = processedWords.NOUN[baseForm] !== undefined
-
-        // Update the counter for this word
-        processedWords.NOUN[baseForm] = (processedWords.NOUN[baseForm] || 0) + 1
-
-        // For client-side processing, assume all words are new initially
-
-        // With this:
-        const isKnown = await checkWordInDatabase(userId, baseForm, 'NOUN')
-        const isNew = !isKnown
-        
-        if (isNew && !isRepeat) {
-          result.stats.newWords++
-          result.stats.newNouns++
-        }
-        else {
-          result.stats.existingWords++  // Add this line
-        }
-
-        // Add to extracted nouns
-        result.extractedWords.nouns.push({
-          baseForm: nounMatch.base_form,
-          originalForm: word,
-          level: nounMatch.level,
-          gender: determineGender(word, nounMatch),
-          case: determineCase(word, nounMatch),
-          translation: await translateText(nounMatch.base_form),
-          isNew: isNew ,
-          // @ts-ignore
-          isKnown: isKnown, 
-          sentence: sentence.text,
-          sentenceTranslation: await translateText(sentence.text),
-        })
-
-        // Add to sentence words
-        processedSentence.words.push({
-          baseForm: nounMatch.base_form,
-          type: "NOUN",
-        })
-
-        // Update level stats
-        updateLevelStats(result.stats, nounMatch.level)
-
-        continue
-      }
-
-      // Check if it's an adjective
-      const adjectiveMatch = findAdjective(word)
-      if (adjectiveMatch) {
-        result.stats.adjectives++
-
-        const baseForm = adjectiveMatch.base_form
-
-        // Check if this word has already been processed in this text
-        const isRepeat = processedWords.ADJ[baseForm] !== undefined
-
-        // Update the counter for this word
-        processedWords.ADJ[baseForm] = (processedWords.ADJ[baseForm] || 0) + 1
-
-        // For client-side processing, assume all words are new initially
-
-   
-        
-        // With this:
-        const isKnown = await checkWordInDatabase(userId, baseForm, 'ADJ')
-        
-        const isNew = !isKnown
-        
-        if (isNew) {
-          if (!isRepeat) {
-            result.stats.newWords++
-            result.stats.newAdjectives++
-          }
-        } else {
-          result.stats.existingWords++
-        }
-
-        // Add to extracted adjectives
-        result.extractedWords.adjectives.push({
-          baseForm: adjectiveMatch.base_form,
-          originalForm: word,
-          level: adjectiveMatch.level,
-          case: determineAdjectiveCase(word, adjectiveMatch),
-          translation: await translateText(adjectiveMatch.base_form),
-          isNew: isNew ,
-          // @ts-ignore
-          isKnown: isKnown, 
-          sentence: sentence.text,
-          sentenceTranslation: await translateText(sentence.text),
-        })
-
-        // Add to sentence words
-        processedSentence.words.push({
-          baseForm: adjectiveMatch.base_form,
-          type: "ADJ",
-        })
-
-        // Update level stats
-        updateLevelStats(result.stats, adjectiveMatch.level)
-
-        continue
-      }
-
-      // If not found in our vocabulary, treat as unknown (likely adverb or other)
-      result.stats.adverbs++
-
-      const baseForm = word
-
-      // Check if this word has already been processed in this text
-      const isRepeat = processedWords.ADV[baseForm] !== undefined
-
-      // Update the counter for this word
-      processedWords.ADV[baseForm] = (processedWords.ADV[baseForm] || 0) + 1
-
-      // Add to extracted adverbs
-      result.extractedWords.adverbs.push({
-        baseForm: word,
-        originalForm: word,
-        level: guessLevel(word),
-        translation: await translateText(word),
-        isNew: true,
-        sentence: sentence.text,
-        sentenceTranslation: await translateText(sentence.text),
-      })
-
-      // Add to sentence words
-      processedSentence.words.push({
-        baseForm: word,
-        type: "ADV",
-      })
+      result.sentences.push(processedSentence)
     }
 
-    // Add processed sentence to result
-    result.sentences.push(processedSentence)
+    if (i + BATCH_SIZE < tokenizedSentences.length) {
+      await new Promise(resolve => setTimeout(resolve, 100))
+    }
   }
 
+  console.log(`Processing complete. Total stats:`, result.stats)
+  console.log(`Themes identified:`, result.themes?.map(t => t.name).join(', '))
   return result
 }
 
-// Helper function to find a verb in the vocabulary
-function findVerb(word: string) {
-  const wordLower = word.toLowerCase()
-
-  // Check direct match
-  if (germanVocabulary.verbs[wordLower]) {
-    return germanVocabulary.verbs[wordLower]
-  }
-
-  // Check conjugated forms
-  for (const [baseForm, verbData] of Object.entries(germanVocabulary.verbs)) {
-    // Check present tense forms
-    if (verbData.present) {
-      for (const mood of Object.values(verbData.present)) {
-        for (const number of Object.values(mood as any)) {
-          for (const person of Object.values(number as any)) {
-            if ((person as any).form === wordLower) {
-              return verbData
-            }
-          }
-        }
-      }
-    }
-
-    // Check past tense forms
-    if (verbData.past) {
-      for (const mood of Object.values(verbData.past)) {
-        for (const number of Object.values(mood as any)) {
-          for (const person of Object.values(number as any)) {
-            if ((person as any).form === wordLower) {
-              return verbData
-            }
-          }
-        }
-      }
-    }
-
-    // Check imperative forms
-    if (verbData.imperative) {
-      for (const number of Object.values(verbData.imperative)) {
-        for (const form of number as any) {
-          if (form.form === wordLower) {
-            return verbData
-          }
-        }
-      }
-    }
-  }
-
-  return null
-}
-
-// Helper function to find a noun in the vocabulary
-function findNoun(word: string) {
-  const wordLower = word.toLowerCase()
-
-  // Check direct match
-  if (germanVocabulary.nouns[wordLower]) {
-    return germanVocabulary.nouns[wordLower]
-  }
-
-  // Check case forms
-  for (const [baseForm, nounData] of Object.entries(germanVocabulary.nouns)) {
-    if (nounData.cases) {
-      for (const caseType of Object.values(nounData.cases)) {
-        for (const gender of Object.values(caseType as any)) {
-          for (const number of Object.values(gender as any)) {
-            if ((number as any).form === wordLower) {
-              return nounData
-            }
-          }
-        }
-      }
-    }
-  }
-
-  return null
-}
-
-// Helper function to find an adjective in the vocabulary
-function findAdjective(word: string) {
-  const wordLower = word.toLowerCase()
-
-  // Check direct match
-  if (germanVocabulary.adjectives[wordLower]) {
-    return germanVocabulary.adjectives[wordLower]
-  }
-
-  // Check declension forms
-  for (const [baseForm, adjData] of Object.entries(germanVocabulary.adjectives)) {
-    if (adjData.declensions) {
-      for (const caseType of Object.values(adjData.declensions)) {
-        for (const gender of Object.values(caseType as any)) {
-          for (const number of Object.values(gender as any)) {
-            if ((number as any).form === wordLower) {
-              return adjData
-            }
-          }
-        }
-      }
-    }
-  }
-
-  return null
-}
-
-// Helper function to determine verb tense
-function determineTense(word: string, verbData: any) {
-  const wordLower = word.toLowerCase()
-
-  // Check present tense
-  if (verbData.present) {
-    for (const mood of Object.values(verbData.present)) {
-      for (const number of Object.values(mood as any)) {
-        for (const person of Object.values(number as any)) {
-          if ((person as any).form === wordLower) {
-            return "present"
-          }
-        }
-      }
-    }
-  }
-
-  // Check past tense
-  if (verbData.past) {
-    for (const mood of Object.values(verbData.past)) {
-      for (const number of Object.values(mood as any)) {
-        for (const person of Object.values(number as any)) {
-          if ((person as any).form === wordLower) {
-            return "past"
-          }
-        }
-      }
-    }
-  }
-
-  // If we can't determine the tense, return unknown
-  return "unknown"
-}
-
-// Helper function to determine noun gender
-function determineGender(word: string, nounData: any) {
-  const wordLower = word.toLowerCase()
-
-  if (!nounData.cases) return "unknown"
-
-  // Check each case for gender information
-  for (const caseType of Object.values(nounData.cases)) {
-    for (const gender of Object.keys(caseType as any)) {
-      for (const number of Object.values((caseType as any)[gender])) {
-        if ((number as any).form === wordLower) {
-          return gender
-        }
-      }
-    }
-  }
-
-  return "unknown"
-}
-
-// Helper function to determine noun case
-function determineCase(word: string, nounData: any) {
-  const wordLower = word.toLowerCase()
-
-  if (!nounData.cases) return "unknown"
-
-  // Check each case
-  for (const [caseType, genders] of Object.entries(nounData.cases)) {
-    for (const gender of Object.values(genders as any)) {
-      for (const number of Object.values(gender as any)) {
-        if ((number as any).form === wordLower) {
-          return caseType
-        }
-      }
-    }
-  }
-
-  return "unknown"
-}
-
-// Helper function to determine adjective case
-function determineAdjectiveCase(word: string, adjData: any) {
-  const wordLower = word.toLowerCase()
-
-  if (!adjData.declensions) return "unknown"
-
-  // Check each case
-  for (const [caseType, genders] of Object.entries(adjData.declensions)) {
-    for (const gender of Object.values(genders as any)) {
-      for (const number of Object.values(gender as any)) {
-        if ((number as any).form === wordLower) {
-          return caseType
-        }
-      }
-    }
-  }
-
-  return "unknown"
-}
+// ... (keep existing helper functi
 
 // Helper function to update level statistics
 function updateLevelStats(stats: any, level: string) {
@@ -577,42 +420,12 @@ function updateLevelStats(stats: any, level: string) {
   }
 }
 
-// Helper function to guess the level of a word
-function guessLevel(word: string) {
-  // In a real implementation, this would use a more sophisticated approach
-  // For now, we'll use word length as a simple heuristic
-  const length = word.length
-
-  if (length <= 4) {
-    return "A1"
-  } else if (length <= 6) {
-    return "A2"
-  } else if (length <= 8) {
-    return "B1"
-  } else {
-    return "B2"
-  }
-}
-
-// Helper function to translate German to English
-async function translateText(text: string) {
-  try {
-    const translator = createTranslator()
-    const translation = await translator.translate(text, { from: "de", to: "en" })
-    console.log(" translating text:", translation)
-
-    return translation
-  } catch (error) {
-    console.error("Error translating text:", error)
-    return `[Translation of: ${text}]`
-  }
-}
-
 // Function to process text with progress updates
 export async function processText(
   text: string,
   title: string,
   onProgress: (progress: number, stats: any) => void,
+  userId: string // Add userId parameter
 ): Promise<ProcessingResult> {
   // Simulate processing steps with progress updates
   onProgress(10, { verbs: 0, nouns: 0, adjectives: 0 })
@@ -625,8 +438,7 @@ export async function processText(
   await new Promise((resolve) => setTimeout(resolve, 500))
 
   // Process the text
-  // @ts-ignore
-  const result = await processGermanText(text, title,userId)
+  const result = await processGermanText(text, title, userId)
 
   // Update progress with actual stats
   onProgress(80, {

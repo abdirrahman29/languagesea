@@ -1,3 +1,4 @@
+// text-actions.ts - Server actions for saving processed text with complete word type support
 "use server"
 
 import { prisma } from "@/lib/db"
@@ -39,19 +40,12 @@ export async function saveProcessedTextAction(userId: string, textData: any) {
     // Track unique words in this text to avoid duplicates
     const processedWords = new Set<string>()
 
-    // Process verbs - with improved handling to avoid duplicates
+    // Process verbs
     for (const verb of textData.extractedWords.verbs) {
-      // Create a unique identifier for this word
       const wordKey = `VERB:${verb.baseForm.toLowerCase()}`
-
-      // Skip if we've already processed this word
-      if (processedWords.has(wordKey)) {
-        continue
-      }
-
+      if (processedWords.has(wordKey)) continue
       processedWords.add(wordKey)
 
-      // First, check if this verb already exists in the database
       let existingVerbId = null
       const existingVerb = await prisma.verb.findFirst({
         where: {
@@ -64,14 +58,11 @@ export async function saveProcessedTextAction(userId: string, textData: any) {
 
       if (existingVerb) {
         existingVerbId = existingVerb.id
-        // Update isNew flag since we found it in the database
         verb.isNew = false
       } else if (verb.isNew) {
         try {
-          // Only create a new verb if it's marked as new and doesn't exist
           const newVerb = await prisma.verb.create({
             data: {
-              id: Math.floor(Math.random() * 1000000) + 1, // Generate a random ID
               baseForm: verb.baseForm,
               level: verb.level,
               dateAdded: new Date(),
@@ -80,11 +71,9 @@ export async function saveProcessedTextAction(userId: string, textData: any) {
           existingVerbId = newVerb.id
         } catch (error) {
           console.error("Error creating verb:", error)
-          // If we can't create the verb, we'll just continue without linking it
         }
       }
 
-      // Create the extracted word entry
       wordPromises.push(
         prisma.extractedWord.create({
           data: {
@@ -96,6 +85,8 @@ export async function saveProcessedTextAction(userId: string, textData: any) {
             tense: verb.tense,
             translation: verb.translation,
             isNew: verb.isNew,
+            isKnown: verb.isKnown || false,
+            isRepeat: verb.isRepeat || false,
             sentence: verb.sentence || "",
             sentenceTranslation: verb.sentenceTranslation || "",
             verbId: existingVerbId,
@@ -104,19 +95,12 @@ export async function saveProcessedTextAction(userId: string, textData: any) {
       )
     }
 
-    // Process nouns with the same pattern
+    // Process nouns
     for (const noun of textData.extractedWords.nouns) {
-      // Create a unique identifier for this word
       const wordKey = `NOUN:${noun.baseForm.toLowerCase()}`
-
-      // Skip if we've already processed this word
-      if (processedWords.has(wordKey)) {
-        continue
-      }
-
+      if (processedWords.has(wordKey)) continue
       processedWords.add(wordKey)
 
-      // First, check if this noun already exists in the database
       let existingNounId = null
       const existingNoun = await prisma.noun.findFirst({
         where: {
@@ -129,27 +113,23 @@ export async function saveProcessedTextAction(userId: string, textData: any) {
 
       if (existingNoun) {
         existingNounId = existingNoun.id
-        // Update isNew flag since we found it in the database
         noun.isNew = false
       } else if (noun.isNew) {
         try {
-          // Only create a new noun if it's marked as new and doesn't exist
           const newNoun = await prisma.noun.create({
             data: {
-              id: Math.floor(Math.random() * 1000000) + 1, // Generate a random ID
               baseForm: noun.baseForm,
               level: noun.level,
+              gender: noun.gender === "unknown" ? null : noun.gender,
               dateAdded: new Date(),
             },
           })
           existingNounId = newNoun.id
         } catch (error) {
           console.error("Error creating noun:", error)
-          // If we can't create the noun, we'll just continue without linking it
         }
       }
 
-      // Create the extracted word entry
       wordPromises.push(
         prisma.extractedWord.create({
           data: {
@@ -162,6 +142,8 @@ export async function saveProcessedTextAction(userId: string, textData: any) {
             case: noun.case,
             translation: noun.translation,
             isNew: noun.isNew,
+            isKnown: noun.isKnown || false,
+            isRepeat: noun.isRepeat || false,
             sentence: noun.sentence || "",
             sentenceTranslation: noun.sentenceTranslation || "",
             nounId: existingNounId,
@@ -170,19 +152,12 @@ export async function saveProcessedTextAction(userId: string, textData: any) {
       )
     }
 
-    // Process adjectives with the same pattern
+    // Process adjectives
     for (const adjective of textData.extractedWords.adjectives) {
-      // Create a unique identifier for this word
       const wordKey = `ADJ:${adjective.baseForm.toLowerCase()}`
-
-      // Skip if we've already processed this word
-      if (processedWords.has(wordKey)) {
-        continue
-      }
-
+      if (processedWords.has(wordKey)) continue
       processedWords.add(wordKey)
 
-      // First, check if this adjective already exists in the database
       let existingAdjectiveId = null
       const existingAdjective = await prisma.adjective.findFirst({
         where: {
@@ -195,14 +170,11 @@ export async function saveProcessedTextAction(userId: string, textData: any) {
 
       if (existingAdjective) {
         existingAdjectiveId = existingAdjective.id
-        // Update isNew flag since we found it in the database
         adjective.isNew = false
       } else if (adjective.isNew) {
         try {
-          // Only create a new adjective if it's marked as new and doesn't exist
           const newAdjective = await prisma.adjective.create({
             data: {
-              id: Math.floor(Math.random() * 1000000) + 1, // Generate a random ID
               baseForm: adjective.baseForm,
               level: adjective.level,
               dateAdded: new Date(),
@@ -211,11 +183,9 @@ export async function saveProcessedTextAction(userId: string, textData: any) {
           existingAdjectiveId = newAdjective.id
         } catch (error) {
           console.error("Error creating adjective:", error)
-          // If we can't create the adjective, we'll just continue without linking it
         }
       }
 
-      // Create the extracted word entry
       wordPromises.push(
         prisma.extractedWord.create({
           data: {
@@ -227,6 +197,8 @@ export async function saveProcessedTextAction(userId: string, textData: any) {
             case: adjective.case,
             translation: adjective.translation,
             isNew: adjective.isNew,
+            isKnown: adjective.isKnown || false,
+            isRepeat: adjective.isRepeat || false,
             sentence: adjective.sentence || "",
             sentenceTranslation: adjective.sentenceTranslation || "",
             adjectiveId: existingAdjectiveId,
@@ -235,17 +207,40 @@ export async function saveProcessedTextAction(userId: string, textData: any) {
       )
     }
 
-    // Process adverbs (these don't have a separate table)
+    // Process adverbs
     for (const adverb of textData.extractedWords.adverbs) {
-      // Create a unique identifier for this word
-      const wordKey = `ADV:${adverb.baseForm.toLowerCase()}`
-
-      // Skip if we've already processed this word
-      if (processedWords.has(wordKey)) {
-        continue
-      }
-
+      const wordKey = `ADVERB:${adverb.baseForm.toLowerCase()}`
+      if (processedWords.has(wordKey)) continue
       processedWords.add(wordKey)
+
+      let existingAdverbId = null
+      const existingAdverb = await prisma.adverb.findFirst({
+        where: {
+          baseForm: {
+            equals: adverb.baseForm,
+            mode: "insensitive",
+          },
+        },
+      })
+
+      if (existingAdverb) {
+        existingAdverbId = existingAdverb.id
+        adverb.isNew = false
+      } else if (adverb.isNew) {
+        try {
+          const newAdverb = await prisma.adverb.create({
+            data: {
+              baseForm: adverb.baseForm,
+              level: adverb.level,
+              type: adverb.type || "other",
+              dateAdded: new Date(),
+            },
+          })
+          existingAdverbId = newAdverb.id
+        } catch (error) {
+          console.error("Error creating adverb:", error)
+        }
+      }
 
       wordPromises.push(
         prisma.extractedWord.create({
@@ -253,12 +248,15 @@ export async function saveProcessedTextAction(userId: string, textData: any) {
             savedTextId: savedText.id,
             baseForm: adverb.baseForm,
             originalForm: adverb.originalForm,
-            type: "ADV",
+            type: "ADVERB",
             level: adverb.level,
             translation: adverb.translation,
             isNew: adverb.isNew,
+            isKnown: adverb.isKnown || false,
+            isRepeat: adverb.isRepeat || false,
             sentence: adverb.sentence || "",
             sentenceTranslation: adverb.sentenceTranslation || "",
+            adverbId: existingAdverbId,
           },
         }),
       )

@@ -2,6 +2,8 @@ import { NextResponse, type NextRequest } from "next/server"
 import { getDashboardData } from "@/lib/data-service"
 
 export async function GET(req: NextRequest) {
+  console.log("Dashboard API called with URL:", req.url)
+
   try {
     const url = new URL(req.url)
     const userId = url.searchParams.get("userId")

@@ -10,6 +10,8 @@ export interface VerbData {
   co_occurrence_bitmask?: string
   bigrams_and_position_hex?: string
   dateAdded: string
+  themes?: string[] // NEW: Add themes to extracted words
+
   present?: {
     indicative?: {
       SG?: {
@@ -60,6 +62,8 @@ export interface NounData {
   co_occurrence_bitmask?: string
   bigrams_and_position_hex?: string
   dateAdded: string
+  themes?: string[] // NEW: Add themes to extracted words
+
   cases?: {
     [caseType: string]: {
       [gender: string]: {
@@ -80,6 +84,8 @@ export interface AdjectiveData {
   co_occurrence_bitmask?: string
   bigrams_and_position_hex?: string
   dateAdded: string
+  themes?: string[] // NEW: Add themes to extracted words
+
   forms?: {
     attributive?: {
       [gender: string]: {
@@ -159,6 +165,7 @@ export interface ProcessingResult {
     newWords: number
     newVerbs: number
     newNouns: number
+    newAdverbs: number
     newAdjectives: number
     existingWords: number
     levelA1: number

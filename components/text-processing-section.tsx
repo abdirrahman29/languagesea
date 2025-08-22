@@ -320,6 +320,9 @@ export default function TextProcessingSection() {
                     <Badge variant="outline" className="bg-yellow-50 text-yellow-700 border-yellow-200">
                       {result.stats.newAdjectives} New Adjectives
                     </Badge>
+                    <Badge variant="outline" className="bg-yellow-50 text-yellow-700 border-yellow-200">
+                      {result.stats.newAdverbs} New Adjectives
+                    </Badge>
                   </div>
                 </div>
 
@@ -345,7 +348,7 @@ export default function TextProcessingSection() {
           </Card>
 
           <Tabs defaultValue="verbs">
-            <TabsList className="grid grid-cols-4 mb-4 bg-teal-50">
+            <TabsList className="grid grid-cols-5 mb-4 bg-teal-50">
               <TabsTrigger value="verbs" className="data-[state=active]:bg-teal-600 data-[state=active]:text-white">
                 Verbs
               </TabsTrigger>
@@ -357,6 +360,9 @@ export default function TextProcessingSection() {
                 className="data-[state=active]:bg-teal-600 data-[state=active]:text-white"
               >
                 Adjectives
+              </TabsTrigger>
+              <TabsTrigger value="adverbs" className="data-[state=active]:bg-teal-600 data-[state=active]:text-white">
+                Adverbs
               </TabsTrigger>
               <TabsTrigger value="sentences" className="data-[state=active]:bg-teal-600 data-[state=active]:text-white">
                 Sentences
@@ -497,7 +503,51 @@ export default function TextProcessingSection() {
                 </CardContent>
               </Card>
             </TabsContent>
-
+            <TabsContent value="adverbs">
+                <Card>
+                  <CardHeader className="bg-purple-50">
+                    <CardTitle className="text-purple-700">Extracted Adverbs</CardTitle>
+                    <CardDescription>
+                      {result.extractedWords.adverbs.length} adverbs found in the text
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent className="pt-6">
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                      {result.extractedWords.adverbs
+                        .filter((adv, index, self) => 
+                          index === self.findIndex(a => a.baseForm === adv.baseForm)
+                        )
+                        .map((adverb, index) => (
+                          <div key={index} className={`p-3 border rounded-md ${
+                            adverb.isNew ? "bg-yellow-50 border-yellow-200" : "bg-green-50 border-green-200"
+                          }`}>
+                            <div className="flex justify-between items-start">
+                              <div>
+                                <h4 className="font-medium">{adverb.baseForm}</h4>
+                                <p className="text-sm text-gray-500">
+                                  {adverb.originalForm !== adverb.baseForm && `Form: ${adverb.originalForm}`}
+                                  {adverb.type && ` • ${adverb.type}`}
+                                </p>
+                              </div>
+                              <div className="flex gap-1">
+                                <Badge>{adverb.level || "Unknown"}</Badge>
+                                {adverb.isNew ? (
+                                  <Badge className="bg-yellow-500">New</Badge>
+                                ) : (
+                                  <Badge className="bg-green-500">Known</Badge>
+                                )}
+                              </div>
+                            </div>
+                            {adverb.translation && (
+                              <p className="text-sm mt-1">Translation: {adverb.translation}</p>
+                            )}
+                          </div>
+                        ))
+                      }
+                    </div>
+                  </CardContent>
+                </Card>
+              </TabsContent>
             <TabsContent value="sentences">
               <Card>
                 <CardHeader className="bg-purple-50">

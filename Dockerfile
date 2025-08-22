@@ -17,12 +17,16 @@ RUN npm install --legacy-peer-deps
 COPY . .
 
 # Generate Database
+ENV NEXT_PUBLIC_SKIP_DB_CONNECT=true
+
+
+RUN npx prisma generate
 
 # Build the Next.js application
 RUN npm run build
 
 # Expose the port the app runs on
-EXPOSE 3006
+EXPOSE 3000
 
 # Start the Next.js application
-CMD ["npm", "run", "start"]
+CMD ["sh", "-c", "npx prisma migrate deploy && npm run start"]
