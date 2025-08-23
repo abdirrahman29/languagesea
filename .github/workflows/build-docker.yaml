@@ -20,6 +20,6 @@ jobs:
     
     - name: Build and push the Docker image
       run: |
-        TAG=${{ secrets.DOCKERHUB_USERNAME }}/languagesea:v2.1
+        TAG=${{ secrets.DOCKERHUB_USERNAME }}/languagesea:v3.0
         docker build . -t $TAG
         docker push $TAG

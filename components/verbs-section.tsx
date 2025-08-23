@@ -1,3 +1,4 @@
+// Enhanced verbs-section.tsx - Complete implementation
 "use client"
 
 import { useState, useEffect } from "react"
@@ -7,30 +8,31 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { Search, Calendar, ArrowUpDown, BookOpen } from "lucide-react"
+import { Search, Calendar, ArrowUpDown, BookOpen, RefreshCw } from "lucide-react"
 import type { VerbData } from "@/lib/types"
-// import { fetchVerbs } from "@/lib/data" // Remove direct import from data
 import { useSession } from "next-auth/react"
 
+interface EnhancedVerbData extends VerbData {
+  hasConjugations?: boolean
+}
 
 export default function VerbsSection() {
-  const [verbs, setVerbs] = useState<VerbData[]>([])
-  const [filteredVerbs, setFilteredVerbs] = useState<VerbData[]>([])
+  const [verbs, setVerbs] = useState<EnhancedVerbData[]>([])
+  const [filteredVerbs, setFilteredVerbs] = useState<EnhancedVerbData[]>([])
   const [searchTerm, setSearchTerm] = useState("")
   const [levelFilter, setLevelFilter] = useState("all")
   const [sortBy, setSortBy] = useState("alphabetical")
-  const [selectedVerb, setSelectedVerb] = useState<VerbData | null>(null)
+  const [selectedVerb, setSelectedVerb] = useState<EnhancedVerbData | null>(null)
   const [viewMode, setViewMode] = useState<"list" | "grid">("list")
   const [isLoading, setIsLoading] = useState(true)
+  const [isGeneratingConjugations, setIsGeneratingConjugations] = useState(false)
   const { data: session } = useSession()
 
   useEffect(() => {
     const loadVerbs = async () => {
       setIsLoading(true)
       try {
-        // Fetch verbs from the API endpoint with userId if available
-              // @ts-ignore
-
+        // @ts-ignore
         const userId = session?.user?.id
         const url = userId ? `/api/vocabulary/verbs?userId=${userId}` : "/api/vocabulary/verbs"
         const response = await fetch(url)
@@ -54,8 +56,7 @@ export default function VerbsSection() {
     }
 
     loadVerbs()
-          // @ts-ignore
-
+    // @ts-ignore
   }, [session?.user?.id])
 
   useEffect(() => {
@@ -80,20 +81,69 @@ export default function VerbsSection() {
         return levelA - levelB
       })
     } else if (sortBy === "date-added") {
-      // In a real app, you would sort by the date added
-      // For now, we'll just use the ID as a proxy for date added
       result.sort((a, b) => b.id - a.id)
     }
 
     setFilteredVerbs(result)
   }, [searchTerm, levelFilter, sortBy, verbs])
 
-  const handleVerbSelect = (verb: VerbData) => {
+  const handleVerbSelect = async (verb: EnhancedVerbData) => {
     setSelectedVerb(verb)
+    
+    // If verb doesn't have conjugations, try to fetch them
+    if (!verb.hasConjugations) {
+      try {
+        const response = await fetch(`/api/vocabulary/verbs?verbId=${verb.id}`)
+        if (response.ok) {
+          const verbWithConjugations = await response.json()
+          setSelectedVerb(verbWithConjugations)
+        }
+      } catch (error) {
+        console.error("Error fetching verb details:", error)
+      }
+    }
+  }
+
+  const handleGenerateConjugations = async (verb: EnhancedVerbData) => {
+    if (!verb) return
+    
+    setIsGeneratingConjugations(true)
+    try {
+      const response = await fetch('/api/vocabulary/verbs', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ verbId: verb.id }),
+      })
+
+      if (response.ok) {
+        const result = await response.json()
+        console.log(result.message)
+        
+        // Refresh the verb data
+        const updatedResponse = await fetch(`/api/vocabulary/verbs?verbId=${verb.id}`)
+        if (updatedResponse.ok) {
+          const updatedVerb = await updatedResponse.json()
+          setSelectedVerb(updatedVerb)
+          
+          // Update the verb in the list
+          setVerbs(prevVerbs => 
+            prevVerbs.map(v => v.id === verb.id ? { ...v, hasConjugations: true } : v)
+          )
+        }
+      } else {
+        console.error('Failed to generate conjugations')
+      }
+    } catch (error) {
+      console.error('Error generating conjugations:', error)
+    } finally {
+      setIsGeneratingConjugations(false)
+    }
   }
 
   const groupVerbsByLevel = () => {
-    const groups: Record<string, VerbData[]> = {}
+    const groups: Record<string, EnhancedVerbData[]> = {}
 
     filteredVerbs.forEach((verb) => {
       const level = verb.level || "Unknown"
@@ -136,7 +186,14 @@ export default function VerbsSection() {
                     className={`p-3 border rounded-md cursor-pointer hover:bg-gray-50 ${selectedVerb?.id === verb.id ? "bg-gray-100 border-teal-500" : ""}`}
                     onClick={() => handleVerbSelect(verb)}
                   >
-                    <div className="font-medium">{verb.base_form}</div>
+                    <div className="flex justify-between items-start">
+                      <div className="font-medium">{verb.base_form}</div>
+                      {!verb.hasConjugations && (
+                        <Badge variant="outline" className="text-xs">
+                          No conjugations
+                        </Badge>
+                      )}
+                    </div>
                     <div className="text-xs text-gray-500">ID: {verb.id}</div>
                   </div>
                 ))}
@@ -159,8 +216,18 @@ export default function VerbsSection() {
               <div>
                 <h4 className="font-medium">{verb.base_form}</h4>
                 <p className="text-sm text-gray-500">ID: {verb.id}</p>
+                {!verb.hasConjugations && (
+                  <p className="text-xs text-orange-500">No conjugations available</p>
+                )}
               </div>
-              <Badge>{verb.level}</Badge>
+              <div className="flex items-center gap-2">
+                <Badge>{verb.level}</Badge>
+                {verb.hasConjugations && (
+                  <Badge variant="secondary" className="text-xs">
+                    ✓ Conjugations
+                  </Badge>
+                )}
+              </div>
             </div>
           </div>
         ))}
@@ -168,266 +235,300 @@ export default function VerbsSection() {
     )
   }
 
-  return (
-    <div className="space-y-4 md:space-y-6">
-      <div className="flex flex-col md:flex-row gap-4">
-        <div className="relative flex-1">
-          <Search className="absolute left-3 top-3 h-4 w-4 text-gray-500" />
-          <Input
-            placeholder="Search verbs..."
-            className="pl-10"
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-          />
+  const renderConjugationContent = (verb: EnhancedVerbData) => {
+    if (!verb.hasConjugations || !verb.present) {
+      return (
+        <div className="flex flex-col items-center justify-center py-8 text-center">
+          <p className="text-gray-500 mb-4">No conjugations available for this verb</p>
+          <Button
+            onClick={() => handleGenerateConjugations(verb)}
+            disabled={isGeneratingConjugations}
+            className="flex items-center gap-2"
+          >
+            {isGeneratingConjugations ? (
+              <>
+                <RefreshCw className="h-4 w-4 animate-spin" />
+                Generating...
+              </>
+            ) : (
+              <>
+                <RefreshCw className="h-4 w-4" />
+                Generate Conjugations
+              </>
+            )}
+          </Button>
         </div>
-        <div className="flex flex-wrap gap-2">
-          <Select value={levelFilter} onValueChange={setLevelFilter}>
-            <SelectTrigger className="w-[120px]">
-              <SelectValue placeholder="Level" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">All Levels</SelectItem>
-              <SelectItem value="A1">A1</SelectItem>
-              <SelectItem value="A2">A2</SelectItem>
-              <SelectItem value="B1">B1</SelectItem>
-              <SelectItem value="B2">B2</SelectItem>
-              <SelectItem value="C1">C1</SelectItem>
-              <SelectItem value="C2">C2</SelectItem>
-            </SelectContent>
-          </Select>
+      )
+    }
 
-          <Select value={sortBy} onValueChange={setSortBy}>
-            <SelectTrigger className="w-[150px]">
-              <SelectValue placeholder="Sort by" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="alphabetical">
-                <div className="flex items-center">
-                  <ArrowUpDown className="h-4 w-4 mr-2" />
-                  Alphabetical
-                </div>
-              </SelectItem>
-              <SelectItem value="level">
-                <div className="flex items-center">
-                  <BookOpen className="h-4 w-4 mr-2" />
-                  By Level
-                </div>
-              </SelectItem>
-              <SelectItem value="date-added">
-                <div className="flex items-center">
-                  <Calendar className="h-4 w-4 mr-2" />
-                  Date Added
-                </div>
-              </SelectItem>
-            </SelectContent>
-          </Select>
-
-          <div className="flex border rounded-md overflow-hidden">
-            <Button
-              variant={viewMode === "list" ? "default" : "ghost"}
-              size="sm"
-              className="rounded-none"
-              onClick={() => setViewMode("list")}
-            >
-              List
-            </Button>
-            <Button
-              variant={viewMode === "grid" ? "default" : "ghost"}
-              size="sm"
-              className="rounded-none"
-              onClick={() => setViewMode("grid")}
-            >
-              Grid
-            </Button>
-          </div>
-        </div>
-      </div>
-
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 md:gap-6">
-        <div className="lg:col-span-1 h-[400px] md:h-[600px] overflow-y-auto border rounded-lg">
-          <div className="p-4 border-b sticky top-0 bg-white z-10">
-            <h3 className="font-medium">Verbs ({filteredVerbs.length})</h3>
-          </div>
-          {renderVerbList()}
+    return (
+      <Tabs defaultValue="present">
+        <div className="overflow-x-auto pb-2">
+          <TabsList className="inline-flex min-w-full md:grid md:grid-cols-3 mb-4">
+            <TabsTrigger value="present">Present</TabsTrigger>
+            <TabsTrigger value="past">Past</TabsTrigger>
+            <TabsTrigger value="imperative">Imperative</TabsTrigger>
+          </TabsList>
         </div>
 
-        <div className="lg:col-span-2">
-          {selectedVerb ? (
-            <Card>
-              <CardHeader className="p-4 md:p-6">
-                <div className="flex justify-between items-start">
-                  <div>
-                    <CardTitle>{selectedVerb.base_form}</CardTitle>
-                    <CardDescription>ID: {selectedVerb.id}</CardDescription>
+        <TabsContent value="present">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <h4 className="font-medium mb-2">Indicative</h4>
+              <div className="space-y-2">
+                <div className="border rounded-md p-3">
+                  <h5 className="text-sm font-medium mb-1">Singular</h5>
+                  <div className="grid grid-cols-2 gap-2 text-sm">
+                    <span className="text-gray-500">ich</span>
+                    <span>{verb.present?.indicative?.SG?.[1]?.form || "-"}</span>
+                    <span className="text-gray-500">du</span>
+                    <span>{verb.present?.indicative?.SG?.[2]?.form || "-"}</span>
+                    <span className="text-gray-500">er/sie/es</span>
+                    <span>{verb.present?.indicative?.SG?.[3]?.form || "-"}</span>
                   </div>
-                  <Badge>{selectedVerb.level}</Badge>
                 </div>
-              </CardHeader>
-              <CardContent className="p-4 md:p-6 pt-0">
-                <Tabs defaultValue="present">
-                  <div className="overflow-x-auto pb-2">
-                    <TabsList className="inline-flex min-w-full md:grid md:grid-cols-3 mb-4">
-                      <TabsTrigger value="present">Present</TabsTrigger>
-                      <TabsTrigger value="past">Past</TabsTrigger>
-                      <TabsTrigger value="imperative">Imperative</TabsTrigger>
-                    </TabsList>
+                <div className="border rounded-md p-3">
+                  <h5 className="text-sm font-medium mb-1">Plural</h5>
+                  <div className="grid grid-cols-2 gap-2 text-sm">
+                    <span className="text-gray-500">wir</span>
+                    <span>{verb.present?.indicative?.PL?.[1]?.form || "-"}</span>
+                    <span className="text-gray-500">ihr</span>
+                    <span>{verb.present?.indicative?.PL?.[2]?.form || "-"}</span>
+                    <span className="text-gray-500">sie/Sie</span>
+                    <span>{verb.present?.indicative?.PL?.[3]?.form || "-"}</span>
                   </div>
-
-                  <TabsContent value="present">
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                      <div>
-                        <h4 className="font-medium mb-2">Indicative</h4>
-                        <div className="space-y-2">
-                          <div className="border rounded-md p-3">
-                            <h5 className="text-sm font-medium mb-1">Singular</h5>
-                            <div className="grid grid-cols-2 gap-2 text-sm">
-                              <span className="text-gray-500">ich</span>
-                              <span>{selectedVerb.present?.indicative?.SG?.[1]?.form || "-"}</span>
-                              <span className="text-gray-500">du</span>
-                              <span>{selectedVerb.present?.indicative?.SG?.[2]?.form || "-"}</span>
-                              <span className="text-gray-500">er/sie/es</span>
-                              <span>{selectedVerb.present?.indicative?.SG?.[3]?.form || "-"}</span>
-                            </div>
-                          </div>
-                          <div className="border rounded-md p-3">
-                            <h5 className="text-sm font-medium mb-1">Plural</h5>
-                            <div className="grid grid-cols-2 gap-2 text-sm">
-                              <span className="text-gray-500">wir</span>
-                              <span>{selectedVerb.present?.indicative?.PL?.[1]?.form || "-"}</span>
-                              <span className="text-gray-500">ihr</span>
-                              <span>{selectedVerb.present?.indicative?.PL?.[2]?.form || "-"}</span>
-                              <span className="text-gray-500">sie/Sie</span>
-                              <span>{selectedVerb.present?.indicative?.PL?.[3]?.form || "-"}</span>
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-
-                      <div>
-                        <h4 className="font-medium mb-2">Subjunctive</h4>
-                        <div className="space-y-2">
-                          <div className="border rounded-md p-3">
-                            <h5 className="text-sm font-medium mb-1">Singular</h5>
-                            <div className="grid grid-cols-2 gap-2 text-sm">
-                              <span className="text-gray-500">ich</span>
-                              <span>{selectedVerb.present?.subjunctive?.SG?.[1]?.form || "-"}</span>
-                              <span className="text-gray-500">du</span>
-                              <span>{selectedVerb.present?.subjunctive?.SG?.[2]?.form || "-"}</span>
-                              <span className="text-gray-500">er/sie/es</span>
-                              <span>{selectedVerb.present?.subjunctive?.SG?.[3]?.form || "-"}</span>
-                            </div>
-                          </div>
-                          <div className="border rounded-md p-3">
-                            <h5 className="text-sm font-medium mb-1">Plural</h5>
-                            <div className="grid grid-cols-2 gap-2 text-sm">
-                              <span className="text-gray-500">wir</span>
-                              <span>{selectedVerb.present?.subjunctive?.PL?.[1]?.form || "-"}</span>
-                              <span className="text-gray-500">ihr</span>
-                              <span>{selectedVerb.present?.subjunctive?.PL?.[2]?.form || "-"}</span>
-                              <span className="text-gray-500">sie/Sie</span>
-                              <span>{selectedVerb.present?.subjunctive?.PL?.[3]?.form || "-"}</span>
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  </TabsContent>
-
-                  <TabsContent value="past">
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                      <div>
-                        <h4 className="font-medium mb-2">Indicative</h4>
-                        <div className="space-y-2">
-                          <div className="border rounded-md p-3">
-                            <h5 className="text-sm font-medium mb-1">Singular</h5>
-                            <div className="grid grid-cols-2 gap-2 text-sm">
-                              <span className="text-gray-500">ich</span>
-                              <span>{selectedVerb.past?.indicative?.SG?.[1]?.form || "-"}</span>
-                              <span className="text-gray-500">du</span>
-                              <span>{selectedVerb.past?.indicative?.SG?.[2]?.form || "-"}</span>
-                              <span className="text-gray-500">er/sie/es</span>
-                              <span>{selectedVerb.past?.indicative?.SG?.[3]?.form || "-"}</span>
-                            </div>
-                          </div>
-                          <div className="border rounded-md p-3">
-                            <h5 className="text-sm font-medium mb-1">Plural</h5>
-                            <div className="grid grid-cols-2 gap-2 text-sm">
-                              <span className="text-gray-500">wir</span>
-                              <span>{selectedVerb.past?.indicative?.PL?.[1]?.form || "-"}</span>
-                              <span className="text-gray-500">ihr</span>
-                              <span>{selectedVerb.past?.indicative?.PL?.[2]?.form || "-"}</span>
-                              <span className="text-gray-500">sie/Sie</span>
-                              <span>{selectedVerb.past?.indicative?.PL?.[3]?.form || "-"}</span>
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-
-                      <div>
-                        <h4 className="font-medium mb-2">Subjunctive</h4>
-                        <div className="space-y-2">
-                          <div className="border rounded-md p-3">
-                            <h5 className="text-sm font-medium mb-1">Singular</h5>
-                            <div className="grid grid-cols-2 gap-2 text-sm">
-                              <span className="text-gray-500">ich</span>
-                              <span>{selectedVerb.past?.subjunctive?.SG?.[1]?.form || "-"}</span>
-                              <span className="text-gray-500">du</span>
-                              <span>{selectedVerb.past?.subjunctive?.SG?.[2]?.form || "-"}</span>
-                              <span className="text-gray-500">er/sie/es</span>
-                              <span>{selectedVerb.past?.subjunctive?.SG?.[3]?.form || "-"}</span>
-                            </div>
-                          </div>
-                          <div className="border rounded-md p-3">
-                            <h5 className="text-sm font-medium mb-1">Plural</h5>
-                            <div className="grid grid-cols-2 gap-2 text-sm">
-                              <span className="text-gray-500">wir</span>
-                              <span>{selectedVerb.past?.subjunctive?.PL?.[1]?.form || "-"}</span>
-                              <span className="text-gray-500">ihr</span>
-                              <span>{selectedVerb.past?.subjunctive?.PL?.[2]?.form || "-"}</span>
-                              <span className="text-gray-500">sie/Sie</span>
-                              <span>{selectedVerb.past?.subjunctive?.PL?.[3]?.form || "-"}</span>
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  </TabsContent>
-
-                  <TabsContent value="imperative">
-                    <div className="border rounded-md p-4">
-                      <h4 className="font-medium mb-2">Imperative Forms</h4>
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
-                        <div>
-                          <h5 className="text-sm font-medium mb-1">Singular</h5>
-                          <div className="grid grid-cols-2 gap-2">
-                            <span className="text-gray-500">du</span>
-                            <span>{selectedVerb.imperative?.SG?.[0]?.form || "-"}</span>
-                          </div>
-                        </div>
-                        <div>
-                          <h5 className="text-sm font-medium mb-1">Plural</h5>
-                          <div className="grid grid-cols-2 gap-2">
-                            <span className="text-gray-500">ihr</span>
-                            <span>{selectedVerb.imperative?.PL?.[0]?.form || "-"}</span>
-                            <span className="text-gray-500">Sie</span>
-                            <span>{selectedVerb.imperative?.PL?.[1]?.form || "-"}</span>
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  </TabsContent>
-                </Tabs>
-              </CardContent>
-            </Card>
-          ) : (
-            <div className="h-full flex items-center justify-center border rounded-lg p-8">
-              <div className="text-center">
-                <h3 className="text-lg font-medium mb-2">Select a verb</h3>
-                <p className="text-gray-500">Choose a verb from the list to view its conjugation details</p>
+                </div>
               </div>
             </div>
-          )}
+
+            <div>
+              <h4 className="font-medium mb-2">Subjunctive</h4>
+              <div className="space-y-2">
+                <div className="border rounded-md p-3">
+                  <h5 className="text-sm font-medium mb-1">Singular</h5>
+                  <div className="grid grid-cols-2 gap-2 text-sm">
+                    <span className="text-gray-500">ich</span>
+                    <span>{verb.present?.subjunctive?.SG?.[1]?.form || "-"}</span>
+                    <span className="text-gray-500">du</span>
+                    <span>{verb.present?.subjunctive?.SG?.[2]?.form || "-"}</span>
+                    <span className="text-gray-500">er/sie/es</span>
+                    <span>{verb.present?.subjunctive?.SG?.[3]?.form || "-"}</span>
+                  </div>
+                </div>
+                <div className="border rounded-md p-3">
+                  <h5 className="text-sm font-medium mb-1">Plural</h5>
+                  <div className="grid grid-cols-2 gap-2 text-sm">
+                    <span className="text-gray-500">wir</span>
+                    <span>{verb.present?.subjunctive?.PL?.[1]?.form || "-"}</span>
+                    <span className="text-gray-500">ihr</span>
+                    <span>{verb.present?.subjunctive?.PL?.[2]?.form || "-"}</span>
+                    <span className="text-gray-500">sie/Sie</span>
+                    <span>{verb.present?.subjunctive?.PL?.[3]?.form || "-"}</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </TabsContent>
+
+        <TabsContent value="past">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <h4 className="font-medium mb-2">Indicative</h4>
+              <div className="space-y-2">
+                <div className="border rounded-md p-3">
+                  <h5 className="text-sm font-medium mb-1">Singular</h5>
+                  <div className="grid grid-cols-2 gap-2 text-sm">
+                    <span className="text-gray-500">ich</span>
+                    <span>{verb.past?.indicative?.SG?.[1]?.form || "-"}</span>
+                    <span className="text-gray-500">du</span>
+                    <span>{verb.past?.indicative?.SG?.[2]?.form || "-"}</span>
+                    <span className="text-gray-500">er/sie/es</span>
+                    <span>{verb.past?.indicative?.SG?.[3]?.form || "-"}</span>
+                  </div>
+                </div>
+                <div className="border rounded-md p-3">
+                  <h5 className="text-sm font-medium mb-1">Plural</h5>
+                  <div className="grid grid-cols-2 gap-2 text-sm">
+                    <span className="text-gray-500">wir</span>
+                    <span>{verb.past?.indicative?.PL?.[1]?.form || "-"}</span>
+                    <span className="text-gray-500">ihr</span>
+                    <span>{verb.past?.indicative?.PL?.[2]?.form || "-"}</span>
+                    <span className="text-gray-500">sie/Sie</span>
+                    <span>{verb.past?.indicative?.PL?.[3]?.form || "-"}</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div>
+              <h4 className="font-medium mb-2">Subjunctive</h4>
+              <div className="space-y-2">
+                <div className="border rounded-md p-3">
+                  <h5 className="text-sm font-medium mb-1">Singular</h5>
+                  <div className="grid grid-cols-2 gap-2 text-sm">
+                    <span className="text-gray-500">ich</span>
+                    <span>{verb.past?.subjunctive?.SG?.[1]?.form || "-"}</span>
+                    <span className="text-gray-500">du</span>
+                    <span>{verb.past?.subjunctive?.SG?.[2]?.form || "-"}</span>
+                    <span className="text-gray-500">er/sie/es</span>
+                    <span>{verb.past?.subjunctive?.SG?.[3]?.form || "-"}</span>
+                  </div>
+                </div>
+                <div className="border rounded-md p-3">
+                  <h5 className="text-sm font-medium mb-1">Plural</h5>
+                  <div className="grid grid-cols-2 gap-2 text-sm">
+                    <span className="text-gray-500">wir</span>
+                    <span>{verb.past?.subjunctive?.PL?.[1]?.form || "-"}</span>
+                    <span className="text-gray-500">ihr</span>
+                    <span>{verb.past?.subjunctive?.PL?.[2]?.form || "-"}</span>
+                    <span className="text-gray-500">sie/Sie</span>
+                    <span>{verb.past?.subjunctive?.PL?.[3]?.form || "-"}</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </TabsContent>
+
+        <TabsContent value="imperative">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <h4 className="font-medium mb-2">Singular Forms (du)</h4>
+              <div className="border rounded-md p-3">
+                {verb.imperative?.SG && verb.imperative.SG.length > 0 ? (
+                  verb.imperative.SG.map((form: any, index: number) => (
+                    <div key={index} className="flex justify-between items-center py-1">
+                      <span className="text-gray-500">du</span>
+                      <span className="font-medium">{form.form}</span>
+                    </div>
+                  ))
+                ) : (
+                  <div className="text-center text-gray-500">No forms available</div>
+                )}
+              </div>
+            </div>
+
+            <div>
+              <h4 className="font-medium mb-2">Plural Forms (ihr/Sie)</h4>
+              <div className="border rounded-md p-3">
+                {verb.imperative?.PL && verb.imperative.PL.length > 0 ? (
+                  verb.imperative.PL.map((form: any, index: number) => (
+                    <div key={index} className="flex justify-between items-center py-1">
+                      <span className="text-gray-500">
+                        {form.person === "2" ? "ihr" : "Sie"}
+                      </span>
+                      <span className="font-medium">{form.form}</span>
+                    </div>
+                  ))
+                ) : (
+                  <div className="text-center text-gray-500">No forms available</div>
+                )}
+              </div>
+            </div>
+          </div>
+        </TabsContent>
+      </Tabs>
+    )
+  }
+
+  return (
+    <div className="space-y-6">
+      {/* Header */}
+      <div>
+        <h2 className="text-2xl font-bold mb-2">Verb Conjugations</h2>
+        <p className="text-gray-600">Explore German verb conjugations with filtering and search</p>
+      </div>
+
+      {/* Controls */}
+      <div className="flex flex-wrap gap-4 items-center">
+        <div className="relative flex-1 min-w-[200px]">
+          <Search className="absolute left-3 top-3 h-4 w-4 text-gray-400" />
+          <Input
+            placeholder="Search verbs..."
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+            className="pl-10"
+          />
         </div>
+
+        <Select value={levelFilter} onValueChange={setLevelFilter}>
+          <SelectTrigger className="w-32">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All Levels</SelectItem>
+            <SelectItem value="A1">A1</SelectItem>
+            <SelectItem value="A2">A2</SelectItem>
+            <SelectItem value="B1">B1</SelectItem>
+            <SelectItem value="B2">B2</SelectItem>
+            <SelectItem value="C1">C1</SelectItem>
+            <SelectItem value="C2">C2</SelectItem>
+          </SelectContent>
+        </Select>
+
+        <Select value={sortBy} onValueChange={setSortBy}>
+          <SelectTrigger className="w-40">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="alphabetical">Alphabetical</SelectItem>
+            <SelectItem value="level">By Level</SelectItem>
+            <SelectItem value="date-added">Date Added</SelectItem>
+          </SelectContent>
+        </Select>
+
+        <Button
+          variant="outline"
+          onClick={() => setViewMode(viewMode === "list" ? "grid" : "list")}
+        >
+          <ArrowUpDown className="h-4 w-4 mr-2" />
+          {viewMode === "list" ? "Grid View" : "List View"}
+        </Button>
+      </div>
+
+      {/* Main Content */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {/* Verb List */}
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <BookOpen className="h-5 w-5" />
+              Verbs ({filteredVerbs.length})
+            </CardTitle>
+            <CardDescription>
+              Click on a verb to view its conjugations
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="p-0 max-h-[600px] overflow-y-auto">
+            {renderVerbList()}
+          </CardContent>
+        </Card>
+
+        {/* Conjugation Details */}
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Calendar className="h-5 w-5" />
+              {selectedVerb ? `Conjugations: ${selectedVerb.base_form}` : "Select a Verb"}
+            </CardTitle>
+            <CardDescription>
+              {selectedVerb 
+                ? `${selectedVerb.level} level verb conjugations`
+                : "Choose a verb from the list to see its conjugations"
+              }
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="max-h-[600px] overflow-y-auto">
+            {selectedVerb ? (
+              renderConjugationContent(selectedVerb)
+            ) : (
+              <div className="flex items-center justify-center h-32 text-gray-500">
+                Select a verb to view conjugations
+              </div>
+            )}
+          </CardContent>
+        </Card>
       </div>
     </div>
   )

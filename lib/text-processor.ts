@@ -1,4 +1,4 @@
-// text-processor.ts - AI-powered German text processor with batch analysis
+// Enhanced text-processor.ts - Added verb conjugation storage
 import type { ProcessingResult } from "./types"
 import { createTranslator } from "@/lib/translator"
 import { prisma } from "@/lib/db"
@@ -72,6 +72,153 @@ async function checkWordInDatabase(userId: string, baseForm: string, type: 'VERB
 
   return practiced || extracted ? true : false
 }
+
+// NEW: Function to save verb conjugations
+async function saveVerbConjugations(verbId: number, conjugations: any) {
+  try {
+    console.log(`Saving conjugations for verb ID ${verbId}`)
+    
+    // Clear existing conjugations for this verb
+    await prisma.verbConjugation.deleteMany({
+      where: { verbId }
+    })
+
+    const conjugationRecords = []
+
+    // Process present tense
+    if (conjugations.present) {
+      // Present indicative
+      if (conjugations.present.indicative) {
+        for (const [number, persons] of Object.entries(conjugations.present.indicative)) {
+          for (const [person, data] of Object.entries(persons as any)) {
+            if (data && (data as any).form) {
+              conjugationRecords.push({
+                verbId,
+                tense: "present",
+                mood: "indicative", 
+                number,
+                person,
+                form: (data as any).form,
+                formId: null
+              })
+            }
+          }
+        }
+      }
+
+      // Present subjunctive
+      if (conjugations.present.subjunctive) {
+        for (const [number, persons] of Object.entries(conjugations.present.subjunctive)) {
+          for (const [person, data] of Object.entries(persons as any)) {
+            if (data && (data as any).form) {
+              conjugationRecords.push({
+                verbId,
+                tense: "present",
+                mood: "subjunctive",
+                number,
+                person,
+                form: (data as any).form,
+                formId: null
+              })
+            }
+          }
+        }
+      }
+    }
+
+    // Process past tense
+    if (conjugations.past) {
+      // Past indicative
+      if (conjugations.past.indicative) {
+        for (const [number, persons] of Object.entries(conjugations.past.indicative)) {
+          for (const [person, data] of Object.entries(persons as any)) {
+            if (data && (data as any).form) {
+              conjugationRecords.push({
+                verbId,
+                tense: "past",
+                mood: "indicative",
+                number,
+                person,
+                form: (data as any).form,
+                formId: null
+              })
+            }
+          }
+        }
+      }
+
+      // Past subjunctive
+      if (conjugations.past.subjunctive) {
+        for (const [number, persons] of Object.entries(conjugations.past.subjunctive)) {
+          for (const [person, data] of Object.entries(persons as any)) {
+            if (data && (data as any).form) {
+              conjugationRecords.push({
+                verbId,
+                tense: "past",
+                mood: "subjunctive",
+                number,
+                person,
+                form: (data as any).form,
+                formId: null
+              })
+            }
+          }
+        }
+      }
+    }
+
+    // Process imperative
+    if (conjugations.imperative) {
+      // Singular imperative (du)
+      if (conjugations.imperative.SG && Array.isArray(conjugations.imperative.SG)) {
+        conjugations.imperative.SG.forEach((form: any, index: number) => {
+          if (form && form.form) {
+            conjugationRecords.push({
+              verbId,
+              tense: "imperative",
+              mood: "imperative",
+              number: "SG",
+              person: form.person || "2", // Usually 'du' form
+              form: form.form,
+              formId: null
+            })
+          }
+        })
+      }
+
+      // Plural imperative (ihr, Sie)
+      if (conjugations.imperative.PL && Array.isArray(conjugations.imperative.PL)) {
+        conjugations.imperative.PL.forEach((form: any, index: number) => {
+          if (form && form.form) {
+            conjugationRecords.push({
+              verbId,
+              tense: "imperative",
+              mood: "imperative", 
+              number: "PL",
+              person: form.person || (index === 0 ? "2" : "3"), // ihr vs Sie
+              form: form.form,
+              formId: null
+            })
+          }
+        })
+      }
+    }
+
+    // Save all conjugations
+    if (conjugationRecords.length > 0) {
+      await prisma.verbConjugation.createMany({
+        data: conjugationRecords
+      })
+      console.log(`Successfully saved ${conjugationRecords.length} conjugation forms for verb ID ${verbId}`)
+    } else {
+      console.log(`No valid conjugation forms found for verb ID ${verbId}`)
+    }
+
+  } catch (error) {
+    console.error(`Error saving conjugations for verb ID ${verbId}:`, error)
+  }
+}
+
 async function createOrFindThemes(extractedThemes: any[]): Promise<string[]> {
   const themeIds: string[] = []
   
@@ -107,7 +254,7 @@ async function createOrFindThemes(extractedThemes: any[]): Promise<string[]> {
   return themeIds
 }
 
-// NEW: Function to add words to themes automatically
+// Function to add words to themes automatically
 async function addWordToThemes(word: any, themes: string[], createdThemeIds: string[]) {
   if (!themes || themes.length === 0 || themes.includes("General")) {
     return // Skip general or undefined themes
@@ -154,9 +301,10 @@ async function addWordToThemes(word: any, themes: string[], createdThemeIds: str
     console.error(`Error adding word ${word.baseForm} to themes:`, error)
   }
 }
+
 const currentTextWordMap = new Map<string, number>();
 
-// Function to process German text
+// Enhanced function to process German text with conjugation storage
 export async function processGermanText(text: string, title: string, userId: string): Promise<ProcessingResult> {
   currentTextWordMap.clear();
 
@@ -188,7 +336,7 @@ export async function processGermanText(text: string, title: string, userId: str
       adverbs: [],
     },
     sentences: [],
-    themes: [] // NEW: Add themes to result
+    themes: []
   }
 
   const processedWords: Record<string, Record<string, number>> = {
@@ -202,7 +350,7 @@ export async function processGermanText(text: string, title: string, userId: str
 
   const translator = createTranslator()
 
-  // NEW: Extract themes from the text
+  // Extract themes from the text
   console.log("Extracting themes from text...")
   const themeExtraction = await translator.extractThemes(text, title)
   result.themes = themeExtraction.themes
@@ -211,6 +359,9 @@ export async function processGermanText(text: string, title: string, userId: str
   const createdThemeIds = await createOrFindThemes(themeExtraction.themes)
   
   console.log("Identified themes:", result.themes.map(t => t.name).join(', '))
+
+  // NEW: Track verbs that need conjugations
+  const verbsNeedingConjugations = new Map<number, string>() // verbId -> baseForm
 
   // Batch process sentences
   const BATCH_SIZE = 5
@@ -254,7 +405,7 @@ export async function processGermanText(text: string, title: string, userId: str
         const wordType = normalizeWordType(rawWordType)
         const level = analysis.level
         const translation = analysis.translation
-        const themes = analysis.themes || ["General"] // NEW: Get themes
+        const themes = analysis.themes || ["General"]
 
         // Check if this word has already been processed in this text
         const currentCount = currentTextWordMap.get(baseForm) || 0;
@@ -268,7 +419,7 @@ export async function processGermanText(text: string, title: string, userId: str
         // Update the counter for this word
         processedWords[wordType][baseForm] = (processedWords[wordType][baseForm] || 0) + 1
 
-        // NEW: Add word to themes if it's new and not a repeat
+        // Add word to themes if it's new and not a repeat
         if (isNew && !isRepeatInCurrentText) {
           await addWordToThemes({
             baseForm,
@@ -279,7 +430,7 @@ export async function processGermanText(text: string, title: string, userId: str
           }, themes, createdThemeIds)
         }
 
-        // Update stats based on word type (existing logic)
+        // Update stats based on word type
         switch (wordType) {
           case 'VERB':
             result.stats.verbs++
@@ -296,13 +447,22 @@ export async function processGermanText(text: string, title: string, userId: str
               level,
               tense: analysis.grammaticalInfo.tense || "unknown",
               translation,
-              themes, // NEW: Add themes to extracted word
+              themes,
               isNew,
               isKnown,
               isRepeat: isRepeatInCurrentText,
               sentence: sentence.text,
               sentenceTranslation: processedSentence.english,
             })
+
+            // NEW: Mark verb for conjugation processing if it's new
+            if (isNew && !isRepeatInCurrentText) {
+              // We'll store the verb ID after creation, so we mark it here
+              const verbKey = `${baseForm}-${wordType}`
+              if (!verbsNeedingConjugations.has(verbKey as any)) {
+                verbsNeedingConjugations.set(verbKey as any, baseForm)
+              }
+            }
             break;
 
           case 'NOUN':
@@ -321,7 +481,7 @@ export async function processGermanText(text: string, title: string, userId: str
               gender: analysis.grammaticalInfo.gender || "unknown",
               case: analysis.grammaticalInfo.case || "unknown",
               translation,
-              themes, // NEW: Add themes to extracted word
+              themes,
               isNew,
               isKnown,
               isRepeat: isRepeatInCurrentText,
@@ -345,7 +505,7 @@ export async function processGermanText(text: string, title: string, userId: str
               level,
               case: analysis.grammaticalInfo.case || "unknown",
               translation,
-              themes, // NEW: Add themes to extracted word
+              themes,
               isNew,
               isKnown,
               isRepeat: isRepeatInCurrentText,
@@ -369,7 +529,7 @@ export async function processGermanText(text: string, title: string, userId: str
               level,
               type: analysis.grammaticalInfo.adverbType || rawWordType.toLowerCase() || "other",
               translation,
-              themes, // NEW: Add themes to extracted word
+              themes,
               isNew,
               isKnown,
               isRepeat: isRepeatInCurrentText,
@@ -397,10 +557,10 @@ export async function processGermanText(text: string, title: string, userId: str
 
   console.log(`Processing complete. Total stats:`, result.stats)
   console.log(`Themes identified:`, result.themes?.map(t => t.name).join(', '))
+  console.log(`Verbs needing conjugations:`, Array.from(verbsNeedingConjugations.values()))
+  
   return result
 }
-
-// ... (keep existing helper functi
 
 // Helper function to update level statistics
 function updateLevelStats(stats: any, level: string) {
@@ -425,7 +585,7 @@ export async function processText(
   text: string,
   title: string,
   onProgress: (progress: number, stats: any) => void,
-  userId: string // Add userId parameter
+  userId: string
 ): Promise<ProcessingResult> {
   // Simulate processing steps with progress updates
   onProgress(10, { verbs: 0, nouns: 0, adjectives: 0 })

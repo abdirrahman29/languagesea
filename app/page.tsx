@@ -15,7 +15,53 @@ import WordRelationshipsSection from "@/components/word-relationships-section"
 import Link from "next/link"
 import { useState, useEffect } from "react"
 import { useSession } from "next-auth/react"
+import GermanLearningLanding from "@/components/german-learning-landing" // Import the new landing component
+// From app/practice/page.tsx
+import PracticeSession from "@/components/practice/practice-session";
 
+
+function PracticeLoading() {
+  return (
+    <div className="max-w-7xl mx-auto px-4 py-6">
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <div className="lg:col-span-2 space-y-6">
+          {/* Header skeleton */}
+          <div className="bg-white rounded-lg border border-gray-200 p-6">
+            <div className="animate-pulse">
+              <div className="h-6 bg-gray-200 rounded w-1/3 mb-2"></div>
+              <div className="h-4 bg-gray-200 rounded w-1/4 mb-4"></div>
+              <div className="h-2 bg-gray-200 rounded w-full"></div>
+            </div>
+          </div>
+          
+          {/* Content skeleton */}
+          <div className="bg-white rounded-lg border border-gray-200 p-6">
+            <div className="animate-pulse space-y-3">
+              <div className="h-4 bg-gray-200 rounded w-full"></div>
+              <div className="h-4 bg-gray-200 rounded w-5/6"></div>
+              <div className="h-4 bg-gray-200 rounded w-4/6"></div>
+              <div className="h-4 bg-gray-200 rounded w-full"></div>
+            </div>
+          </div>
+        </div>
+        
+        <div className="space-y-6">
+          {/* Settings skeleton */}
+          <div className="bg-white rounded-lg border border-gray-200 p-4">
+            <div className="animate-pulse">
+              <div className="h-5 bg-gray-200 rounded w-1/2 mb-4"></div>
+              <div className="space-y-3">
+                <div className="h-4 bg-gray-200 rounded w-3/4"></div>
+                <div className="h-4 bg-gray-200 rounded w-2/3"></div>
+                <div className="h-10 bg-gray-200 rounded w-full mt-4"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
 interface DashboardData {
   stats: {
     totalWords: number
@@ -71,8 +117,7 @@ export default function Home() {
 
   useEffect(() => {
     const fetchDashboardData = async () => {
-            // @ts-ignore
-
+      // @ts-ignore
       if (!session?.user?.id) {
         setIsLoading(false)
         return
@@ -81,8 +126,7 @@ export default function Home() {
       try {
         setIsLoading(true)
         setError(null)
-              // @ts-ignore
-
+        // @ts-ignore
         const response = await fetch(`/api/dashboard?userId=${session.user.id}`)
         
         if (!response.ok) throw new Error("Failed to fetch dashboard data")
@@ -97,10 +141,24 @@ export default function Home() {
     }
 
     fetchDashboardData()
-          // @ts-ignore
-
+    // @ts-ignore
   }, [session?.user?.id])
 
+  // Show loading state during authentication check
+  if (status === "loading") {
+    return (
+      <div className="flex justify-center items-center min-h-screen">
+        <Loader2 className="h-8 w-8 animate-spin text-teal-600" />
+      </div>
+    )
+  }
+
+  // Show landing page for unauthenticated users
+  if (status === "unauthenticated" || !session) {
+    return <GermanLearningLanding />
+  }
+
+  // Loading state for dashboard data
   if (isLoading) {
     return (
       <div className="flex justify-center items-center min-h-screen">
@@ -109,6 +167,7 @@ export default function Home() {
     )
   }
 
+  // Error state
   if (error) {
     return (
       <div className="flex justify-center items-center min-h-screen text-red-500">
@@ -117,6 +176,7 @@ export default function Home() {
     )
   }
 
+  // No data state
   if (!dashboardData) {
     return (
       <div className="flex justify-center items-center min-h-screen">
@@ -138,8 +198,12 @@ export default function Home() {
                 <TabsList className="inline-flex min-w-full md:grid md:grid-cols-7 mb-4 md:mb-6">
                   <TabsTrigger value="dashboard">Dashboard</TabsTrigger>
                   <TabsTrigger value="vocabulary">Vocabulary</TabsTrigger>
-                  <TabsTrigger value="practice">Practice</TabsTrigger>
-                  <TabsTrigger value="process">Process Text</TabsTrigger>
+                  <TabsTrigger asChild value="practice">
+                      <Link href="/practice">
+                          Practice
+                      </Link>
+                  </TabsTrigger>
+                    <TabsTrigger value="process">Process Text</TabsTrigger>
                   <TabsTrigger value="saved-texts">Saved Texts</TabsTrigger>
                   <TabsTrigger value="frequency">Frequency</TabsTrigger>
                   <TabsTrigger value="relationships">Relationships</TabsTrigger>
@@ -154,65 +218,6 @@ export default function Home() {
                 <VocabularySection />
               </TabsContent>
 
-              <TabsContent value="practice">
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 md:gap-6">
-                  <Card>
-                    <CardHeader className="p-4 md:p-6">
-                      <CardTitle>Conjugation Practice</CardTitle>
-                      <CardDescription>Practice verb conjugations in different tenses</CardDescription>
-                    </CardHeader>
-                    <CardContent className="p-4 md:p-6 pt-0">
-                      <div className="flex justify-between items-center">
-                        <span className="text-sm text-gray-500">0 of 3,388 Conjugation Cards Seen</span>
-                        <Button size="sm">Start</Button>
-                      </div>
-                      <Progress value={0} className="h-2 mt-2" />
-                    </CardContent>
-                  </Card>
-
-                  <Card>
-                    <CardHeader className="p-4 md:p-6">
-                      <CardTitle>Gender Practice</CardTitle>
-                      <CardDescription>Master noun genders with interactive exercises</CardDescription>
-                    </CardHeader>
-                    <CardContent className="p-4 md:p-6 pt-0">
-                      <div className="flex justify-between items-center">
-                        <span className="text-sm text-gray-500">0 of 5,247 Gender Cards Seen</span>
-                        <Button size="sm">Start</Button>
-                      </div>
-                      <Progress value={0} className="h-2 mt-2" />
-                    </CardContent>
-                  </Card>
-
-                  <Card>
-                    <CardHeader className="p-4 md:p-6">
-                      <CardTitle>Plural Forms</CardTitle>
-                      <CardDescription>Learn regular and irregular plural forms</CardDescription>
-                    </CardHeader>
-                    <CardContent className="p-4 md:p-6 pt-0">
-                      <div className="flex justify-between items-center">
-                        <span className="text-sm text-gray-500">0 of 7,907 Plural Cards Seen</span>
-                        <Button size="sm">Start</Button>
-                      </div>
-                      <Progress value={0} className="h-2 mt-2" />
-                    </CardContent>
-                  </Card>
-
-                  <Card>
-                    <CardHeader className="p-4 md:p-6">
-                      <CardTitle>Case Practice</CardTitle>
-                      <CardDescription>Practice nominative, accusative, dative and genitive cases</CardDescription>
-                    </CardHeader>
-                    <CardContent className="p-4 md:p-6 pt-0">
-                      <div className="flex justify-between items-center">
-                        <span className="text-sm text-gray-500">0 of 4,125 Case Cards Seen</span>
-                        <Button size="sm">Start</Button>
-                      </div>
-                      <Progress value={0} className="h-2 mt-2" />
-                    </CardContent>
-                  </Card>
-                </div>
-              </TabsContent>
 
               <TabsContent value="process">
                 <TextProcessingSection />
