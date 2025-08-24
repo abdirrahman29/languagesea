@@ -1,4 +1,4 @@
-// Enhanced text-processor.ts - Added verb conjugation storage
+// Optimized text-processor.ts - Fixed conjugation saving and efficient batch processing
 import type { ProcessingResult } from "./types"
 import { createTranslator } from "@/lib/translator"
 import { prisma } from "@/lib/db"
@@ -73,149 +73,117 @@ async function checkWordInDatabase(userId: string, baseForm: string, type: 'VERB
   return practiced || extracted ? true : false
 }
 
-// NEW: Function to save verb conjugations
-async function saveVerbConjugations(verbId: number, conjugations: any) {
+// FIXED: Function to save verb conjugations with proper error handling
+async function saveVerbConjugations(verbId: number, baseForm: string) {
   try {
-    console.log(`Saving conjugations for verb ID ${verbId}`)
+    console.log(`Getting conjugations for verb: ${baseForm} (ID: ${verbId})`)
     
+    const translator = createTranslator()
+    const conjugationData = await translator.getVerbConjugations(baseForm)
+    
+    if (!conjugationData?.conjugations) {
+      console.log(`No conjugations found for ${baseForm}`)
+      return false
+    }
+
     // Clear existing conjugations for this verb
     await prisma.verbConjugation.deleteMany({
       where: { verbId }
     })
 
     const conjugationRecords = []
+    const conjugations = conjugationData.conjugations
+
+    // Helper function to safely add conjugation records
+    const addConjugationRecord = (tense: string, mood: string, number: string, person: string, form: string) => {
+      if (form && form.trim()) {
+        conjugationRecords.push({
+          verbId,
+          tense,
+          mood,
+          number,
+          person,
+          form: form.trim(),
+          formId: null
+        })
+      }
+    }
 
     // Process present tense
-    if (conjugations.present) {
-      // Present indicative
-      if (conjugations.present.indicative) {
-        for (const [number, persons] of Object.entries(conjugations.present.indicative)) {
-          for (const [person, data] of Object.entries(persons as any)) {
-            if (data && (data as any).form) {
-              conjugationRecords.push({
-                verbId,
-                tense: "present",
-                mood: "indicative", 
-                number,
-                person,
-                form: (data as any).form,
-                formId: null
-              })
-            }
+    if (conjugations.present?.indicative) {
+      for (const [number, persons] of Object.entries(conjugations.present.indicative)) {
+        for (const [person, data] of Object.entries(persons as any)) {
+          if (data && (data as any).form) {
+            addConjugationRecord("present", "indicative", number, person, (data as any).form)
           }
         }
       }
+    }
 
-      // Present subjunctive
-      if (conjugations.present.subjunctive) {
-        for (const [number, persons] of Object.entries(conjugations.present.subjunctive)) {
-          for (const [person, data] of Object.entries(persons as any)) {
-            if (data && (data as any).form) {
-              conjugationRecords.push({
-                verbId,
-                tense: "present",
-                mood: "subjunctive",
-                number,
-                person,
-                form: (data as any).form,
-                formId: null
-              })
-            }
+    if (conjugations.present?.subjunctive) {
+      for (const [number, persons] of Object.entries(conjugations.present.subjunctive)) {
+        for (const [person, data] of Object.entries(persons as any)) {
+          if (data && (data as any).form) {
+            addConjugationRecord("present", "subjunctive", number, person, (data as any).form)
           }
         }
       }
     }
 
     // Process past tense
-    if (conjugations.past) {
-      // Past indicative
-      if (conjugations.past.indicative) {
-        for (const [number, persons] of Object.entries(conjugations.past.indicative)) {
-          for (const [person, data] of Object.entries(persons as any)) {
-            if (data && (data as any).form) {
-              conjugationRecords.push({
-                verbId,
-                tense: "past",
-                mood: "indicative",
-                number,
-                person,
-                form: (data as any).form,
-                formId: null
-              })
-            }
+    if (conjugations.past?.indicative) {
+      for (const [number, persons] of Object.entries(conjugations.past.indicative)) {
+        for (const [person, data] of Object.entries(persons as any)) {
+          if (data && (data as any).form) {
+            addConjugationRecord("past", "indicative", number, person, (data as any).form)
           }
         }
       }
+    }
 
-      // Past subjunctive
-      if (conjugations.past.subjunctive) {
-        for (const [number, persons] of Object.entries(conjugations.past.subjunctive)) {
-          for (const [person, data] of Object.entries(persons as any)) {
-            if (data && (data as any).form) {
-              conjugationRecords.push({
-                verbId,
-                tense: "past",
-                mood: "subjunctive",
-                number,
-                person,
-                form: (data as any).form,
-                formId: null
-              })
-            }
+    if (conjugations.past?.subjunctive) {
+      for (const [number, persons] of Object.entries(conjugations.past.subjunctive)) {
+        for (const [person, data] of Object.entries(persons as any)) {
+          if (data && (data as any).form) {
+            addConjugationRecord("past", "subjunctive", number, person, (data as any).form)
           }
         }
       }
     }
 
     // Process imperative
-    if (conjugations.imperative) {
-      // Singular imperative (du)
-      if (conjugations.imperative.SG && Array.isArray(conjugations.imperative.SG)) {
-        conjugations.imperative.SG.forEach((form: any, index: number) => {
-          if (form && form.form) {
-            conjugationRecords.push({
-              verbId,
-              tense: "imperative",
-              mood: "imperative",
-              number: "SG",
-              person: form.person || "2", // Usually 'du' form
-              form: form.form,
-              formId: null
-            })
-          }
-        })
-      }
-
-      // Plural imperative (ihr, Sie)
-      if (conjugations.imperative.PL && Array.isArray(conjugations.imperative.PL)) {
-        conjugations.imperative.PL.forEach((form: any, index: number) => {
-          if (form && form.form) {
-            conjugationRecords.push({
-              verbId,
-              tense: "imperative",
-              mood: "imperative", 
-              number: "PL",
-              person: form.person || (index === 0 ? "2" : "3"), // ihr vs Sie
-              form: form.form,
-              formId: null
-            })
-          }
-        })
-      }
+    if (conjugations.imperative?.SG && Array.isArray(conjugations.imperative.SG)) {
+      conjugations.imperative.SG.forEach((form: any) => {
+        if (form?.form) {
+          addConjugationRecord("imperative", "imperative", "SG", form.person || "2", form.form)
+        }
+      })
     }
 
-    // Save all conjugations
+    if (conjugations.imperative?.PL && Array.isArray(conjugations.imperative.PL)) {
+      conjugations.imperative.PL.forEach((form: any, index: number) => {
+        if (form?.form) {
+          addConjugationRecord("imperative", "imperative", "PL", form.person || (index === 0 ? "2" : "3"), form.form)
+        }
+      })
+    }
+
+    // Save all conjugations in a single transaction
     if (conjugationRecords.length > 0) {
       await prisma.verbConjugation.createMany({
-        data: conjugationRecords
+        data: conjugationRecords,
+        skipDuplicates: true // Prevent errors from duplicate entries
       })
-      console.log(`Successfully saved ${conjugationRecords.length} conjugation forms for verb ID ${verbId}`)
+      console.log(`✅ Successfully saved ${conjugationRecords.length} conjugation forms for verb ${baseForm} (ID: ${verbId})`)
+      return true
     } else {
-      console.log(`No valid conjugation forms found for verb ID ${verbId}`)
+      console.log(`⚠️ No valid conjugation forms found for verb ${baseForm} (ID: ${verbId})`)
+      return false
     }
 
   } catch (error) {
-    console.error(`Error saving conjugations for verb ID ${verbId}:`, error)
+    console.error(`❌ Error saving conjugations for verb ${baseForm} (ID: ${verbId}):`, error)
+    return false
   }
 }
 
@@ -304,7 +272,7 @@ async function addWordToThemes(word: any, themes: string[], createdThemeIds: str
 
 const currentTextWordMap = new Map<string, number>();
 
-// Enhanced function to process German text with conjugation storage
+// OPTIMIZED: Enhanced function to process German text with efficient batching and fixed conjugations
 export async function processGermanText(text: string, title: string, userId: string): Promise<ProcessingResult> {
   currentTextWordMap.clear();
 
@@ -360,204 +328,196 @@ export async function processGermanText(text: string, title: string, userId: str
   
   console.log("Identified themes:", result.themes.map(t => t.name).join(', '))
 
-  // NEW: Track verbs that need conjugations
-  const verbsNeedingConjugations = new Map<number, string>() // verbId -> baseForm
-
-  // Batch process sentences
-  const BATCH_SIZE = 5
+  // OPTIMIZED: Use the new efficient batch processing
+  console.log(`Processing ${tokenizedSentences.length} sentences with optimized batching...`)
   
-  for (let i = 0; i < tokenizedSentences.length; i += BATCH_SIZE) {
-    const sentenceBatch = tokenizedSentences.slice(i, i + BATCH_SIZE)
-    
-    const batchData = sentenceBatch.map(sentence => ({
-      text: sentence.text,
-      words: sentence.words.filter(word => word && word.length > 0)
-    }))
+  const sentenceData = tokenizedSentences.map(sentence => ({
+    text: sentence.text,
+    words: sentence.words.filter(word => word && word.length > 0)
+  }))
 
-    console.log(`Processing batch ${Math.floor(i/BATCH_SIZE) + 1}/${Math.ceil(tokenizedSentences.length/BATCH_SIZE)}`)
+  // Use the optimized batch analyzer with larger chunks
+  const maxWordsPerBatch = 400 // Adjust based on your API limits
+  const batchAnalysis = await translator.batchAnalyzeEntireText(
+    sentenceData, 
+    result.themes, 
+    true, // Include conjugations for efficiency
+    maxWordsPerBatch
+  )
 
-    // Pass themes to the analysis for better categorization
-    const batchAnalysis = await translator.batchAnalyzeText(batchData, result.themes)
+  console.log(`Batch analysis complete, processing ${batchAnalysis.sentences.length} sentences...`)
 
-    // Process each sentence in the batch
-    for (let j = 0; j < sentenceBatch.length; j++) {
-      const sentence = sentenceBatch[j]
-      const sentenceAnalysis = batchAnalysis.sentences[j]
+  // Process each sentence from the batch analysis
+  for (let i = 0; i < tokenizedSentences.length; i++) {
+    const sentence = tokenizedSentences[i]
+    const sentenceAnalysis = batchAnalysis.sentences[i]
 
-      const processedSentence = {
-        german: sentence.text,
-        english: sentenceAnalysis.sentenceTranslation,
-        words: [] as Array<{ baseForm: string; type: string }>,
+    if (!sentenceAnalysis) {
+      console.warn(`No analysis found for sentence ${i}: "${sentence.text}"`)
+      continue
+    }
+
+    const processedSentence = {
+      german: sentence.text,
+      english: sentenceAnalysis.sentenceTranslation,
+      words: [] as Array<{ baseForm: string; type: string }>,
+    }
+
+    // Process each word in the sentence
+    for (const word of sentence.words) {
+      if (!word) continue
+
+      const analysis = sentenceAnalysis.words[word]
+      if (!analysis) {
+        console.log(`No analysis found for word: "${word}"`)
+        continue
       }
 
-      // Process each word in the sentence
-      for (const word of sentence.words) {
-        if (!word) continue
+      const baseForm = analysis.baseForm
+      const rawWordType = analysis.wordType
+      const wordType = normalizeWordType(rawWordType)
+      const level = analysis.level
+      const translation = analysis.translation
+      const themes = analysis.themes || ["General"]
 
-        const analysis = sentenceAnalysis.words[word]
-        if (!analysis) {
-          console.log(`No analysis found for word: "${word}"`)
-          continue
-        }
+      // Check if this word has already been processed in this text
+      const currentCount = currentTextWordMap.get(baseForm) || 0;
+      const isRepeatInCurrentText = currentCount > 0;
+      currentTextWordMap.set(baseForm, currentCount + 1);
 
-        const baseForm = analysis.baseForm
-        const rawWordType = analysis.wordType
-        const wordType = normalizeWordType(rawWordType)
-        const level = analysis.level
-        const translation = analysis.translation
-        const themes = analysis.themes || ["General"]
+      // Check if word is known in database
+      const isKnown = await checkWordInDatabase(userId, baseForm, wordType)
+      const isNew = !isKnown
 
-        // Check if this word has already been processed in this text
-        const currentCount = currentTextWordMap.get(baseForm) || 0;
-        const isRepeatInCurrentText = currentCount > 0;
-        currentTextWordMap.set(baseForm, currentCount + 1);
+      // Update the counter for this word
+      processedWords[wordType][baseForm] = (processedWords[wordType][baseForm] || 0) + 1
 
-        // Check if word is known in database
-        const isKnown = await checkWordInDatabase(userId, baseForm, wordType)
-        const isNew = !isKnown
-
-        // Update the counter for this word
-        processedWords[wordType][baseForm] = (processedWords[wordType][baseForm] || 0) + 1
-
-        // Add word to themes if it's new and not a repeat
-        if (isNew && !isRepeatInCurrentText) {
-          await addWordToThemes({
-            baseForm,
-            type: wordType,
-            level,
-            translation,
-            gender: analysis.grammaticalInfo?.gender
-          }, themes, createdThemeIds)
-        }
-
-        // Update stats based on word type
-        switch (wordType) {
-          case 'VERB':
-            result.stats.verbs++
-            if (isNew && !isRepeatInCurrentText) {
-              result.stats.newWords++
-              result.stats.newVerbs++
-            } else if (!isNew) {
-              result.stats.existingWords++
-            }
-
-            result.extractedWords.verbs.push({
-              baseForm,
-              originalForm: word,
-              level,
-              tense: analysis.grammaticalInfo.tense || "unknown",
-              translation,
-              themes,
-              isNew,
-              isKnown,
-              isRepeat: isRepeatInCurrentText,
-              sentence: sentence.text,
-              sentenceTranslation: processedSentence.english,
-            })
-
-            // NEW: Mark verb for conjugation processing if it's new
-            if (isNew && !isRepeatInCurrentText) {
-              // We'll store the verb ID after creation, so we mark it here
-              const verbKey = `${baseForm}-${wordType}`
-              if (!verbsNeedingConjugations.has(verbKey as any)) {
-                verbsNeedingConjugations.set(verbKey as any, baseForm)
-              }
-            }
-            break;
-
-          case 'NOUN':
-            result.stats.nouns++
-            if (isNew && !isRepeatInCurrentText) {
-              result.stats.newWords++
-              result.stats.newNouns++
-            } else if (!isNew) {
-              result.stats.existingWords++
-            }
-
-            result.extractedWords.nouns.push({
-              baseForm,
-              originalForm: word,
-              level,
-              gender: analysis.grammaticalInfo.gender || "unknown",
-              case: analysis.grammaticalInfo.case || "unknown",
-              translation,
-              themes,
-              isNew,
-              isKnown,
-              isRepeat: isRepeatInCurrentText,
-              sentence: sentence.text,
-              sentenceTranslation: processedSentence.english,
-            })
-            break;
-
-          case 'ADJ':
-            result.stats.adjectives++
-            if (isNew && !isRepeatInCurrentText) {
-              result.stats.newWords++
-              result.stats.newAdjectives++
-            } else if (!isNew) {
-              result.stats.existingWords++
-            }
-
-            result.extractedWords.adjectives.push({
-              baseForm,
-              originalForm: word,
-              level,
-              case: analysis.grammaticalInfo.case || "unknown",
-              translation,
-              themes,
-              isNew,
-              isKnown,
-              isRepeat: isRepeatInCurrentText,
-              sentence: sentence.text,
-              sentenceTranslation: processedSentence.english,
-            })
-            break;
-
-          case 'ADVERB':
-          default:
-            result.stats.adverbs++
-            if (isNew && !isRepeatInCurrentText) {
-              result.stats.newWords++
-            } else if (!isNew) {
-              result.stats.existingWords++
-            }
-
-            result.extractedWords.adverbs.push({
-              baseForm,
-              originalForm: word,
-              level,
-              type: analysis.grammaticalInfo.adverbType || rawWordType.toLowerCase() || "other",
-              translation,
-              themes,
-              isNew,
-              isKnown,
-              isRepeat: isRepeatInCurrentText,
-              sentence: sentence.text,
-              sentenceTranslation: processedSentence.english,
-            })
-            break;
-        }
-
-        processedSentence.words.push({
+      // Add word to themes if it's new and not a repeat
+      if (isNew && !isRepeatInCurrentText) {
+        await addWordToThemes({
           baseForm,
           type: wordType,
-        })
-
-        updateLevelStats(result.stats, level)
+          level,
+          translation,
+          gender: analysis.grammaticalInfo?.gender
+        }, themes, createdThemeIds)
       }
 
-      result.sentences.push(processedSentence)
+      // Update stats based on word type
+      switch (wordType) {
+        case 'VERB':
+          result.stats.verbs++
+          if (isNew && !isRepeatInCurrentText) {
+            result.stats.newWords++
+            result.stats.newVerbs++
+          } else if (!isNew) {
+            result.stats.existingWords++
+          }
+
+          result.extractedWords.verbs.push({
+            baseForm,
+            originalForm: word,
+            level,
+            tense: analysis.grammaticalInfo?.tense || "unknown",
+            translation,
+            themes,
+            isNew,
+            isKnown,
+            isRepeat: isRepeatInCurrentText,
+            sentence: sentence.text,
+            sentenceTranslation: processedSentence.english,
+            // ADDED: Include conjugation hint if available
+            conjugationHint: analysis.conjugationHint || undefined
+          })
+          break;
+
+        case 'NOUN':
+          result.stats.nouns++
+          if (isNew && !isRepeatInCurrentText) {
+            result.stats.newWords++
+            result.stats.newNouns++
+          } else if (!isNew) {
+            result.stats.existingWords++
+          }
+
+          result.extractedWords.nouns.push({
+            baseForm,
+            originalForm: word,
+            level,
+            gender: analysis.grammaticalInfo?.gender || "unknown",
+            case: analysis.grammaticalInfo?.case || "unknown",
+            translation,
+            themes,
+            isNew,
+            isKnown,
+            isRepeat: isRepeatInCurrentText,
+            sentence: sentence.text,
+            sentenceTranslation: processedSentence.english,
+          })
+          break;
+
+        case 'ADJ':
+          result.stats.adjectives++
+          if (isNew && !isRepeatInCurrentText) {
+            result.stats.newWords++
+            result.stats.newAdjectives++
+          } else if (!isNew) {
+            result.stats.existingWords++
+          }
+
+          result.extractedWords.adjectives.push({
+            baseForm,
+            originalForm: word,
+            level,
+            case: analysis.grammaticalInfo?.case || "unknown",
+            translation,
+            themes,
+            isNew,
+            isKnown,
+            isRepeat: isRepeatInCurrentText,
+            sentence: sentence.text,
+            sentenceTranslation: processedSentence.english,
+          })
+          break;
+
+        case 'ADVERB':
+        default:
+          result.stats.adverbs++
+          if (isNew && !isRepeatInCurrentText) {
+            result.stats.newWords++
+          } else if (!isNew) {
+            result.stats.existingWords++
+          }
+
+          result.extractedWords.adverbs.push({
+            baseForm,
+            originalForm: word,
+            level,
+            type: analysis.grammaticalInfo?.adverbType || rawWordType.toLowerCase() || "other",
+            translation,
+            themes,
+            isNew,
+            isKnown,
+            isRepeat: isRepeatInCurrentText,
+            sentence: sentence.text,
+            sentenceTranslation: processedSentence.english,
+          })
+          break;
+      }
+
+      processedSentence.words.push({
+        baseForm,
+        type: wordType,
+      })
+
+      updateLevelStats(result.stats, level)
     }
 
-    if (i + BATCH_SIZE < tokenizedSentences.length) {
-      await new Promise(resolve => setTimeout(resolve, 100))
-    }
+    result.sentences.push(processedSentence)
   }
 
   console.log(`Processing complete. Total stats:`, result.stats)
   console.log(`Themes identified:`, result.themes?.map(t => t.name).join(', '))
-  console.log(`Verbs needing conjugations:`, Array.from(verbsNeedingConjugations.values()))
   
   return result
 }
@@ -639,3 +599,6 @@ export async function saveProcessedTextAction(userId: string, textData: any) {
     return { success: false, error: "An error occurred while saving the text" }
   }
 }
+
+// ADDED: Export the saveVerbConjugations function for use in text-actions
+export { saveVerbConjugations }

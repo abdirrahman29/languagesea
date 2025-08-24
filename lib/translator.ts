@@ -1,4 +1,4 @@
-// Enhanced translator.ts - Added content generation method
+// Optimized translator.ts - Efficient batch processing to save API quota
 import { GoogleGenerativeAI } from "@google/generative-ai"
 
 // Initialize Gemini API
@@ -18,6 +18,34 @@ function extractJsonFromResponse(text: string): string {
   // If no code blocks, return the text as-is
   console.log("No code blocks found, using raw text")
   return text.trim()
+}
+
+// Helper function to chunk sentences into larger batches
+function chunkSentences(sentences: Array<{text: string, words: string[]}>, maxWordsPerBatch: number = 200) {
+  const chunks: Array<Array<{text: string, words: string[]}>> = []
+  let currentChunk: Array<{text: string, words: string[]}> = []
+  let currentWordCount = 0
+  
+  for (const sentence of sentences) {
+    const sentenceWordCount = sentence.words.length
+    
+    // If adding this sentence would exceed the limit, start a new chunk
+    if (currentWordCount + sentenceWordCount > maxWordsPerBatch && currentChunk.length > 0) {
+      chunks.push(currentChunk)
+      currentChunk = [sentence]
+      currentWordCount = sentenceWordCount
+    } else {
+      currentChunk.push(sentence)
+      currentWordCount += sentenceWordCount
+    }
+  }
+  
+  // Don't forget the last chunk
+  if (currentChunk.length > 0) {
+    chunks.push(currentChunk)
+  }
+  
+  return chunks
 }
 
 export function createTranslator() {
@@ -170,34 +198,43 @@ Provide accurate German conjugations for all tenses and moods. Return ONLY valid
       }
     },
 
-    // Enhanced batch analysis that can optionally include conjugations
-    batchAnalyzeText: async (
+    // OPTIMIZED: Process entire documents in minimal API calls
+    batchAnalyzeEntireText: async (
       sentences: Array<{text: string, words: string[]}>, 
       extractedThemes?: any[], 
-      includeConjugations: boolean = false
+      includeConjugations: boolean = false,
+      maxWordsPerBatch: number = 300 // Adjust based on your needs
     ) => {
       try {
-        const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" })
+        const model = genAI.getGenerativeModel({ model: "gemini-1.5-pro" }) // Use Pro for larger context
         
-        const sentencesText = sentences.map((s, idx) => 
-          `Sentence ${idx + 1}: "${s.text}"\nWords to analyze: ${s.words.map(w => `"${w}"`).join(', ')}`
-        ).join('\n\n')
+        // Chunk sentences into larger batches to minimize API calls
+        const chunks = chunkSentences(sentences, maxWordsPerBatch)
+        console.log(`Processing ${sentences.length} sentences in ${chunks.length} API calls (was ${Math.ceil(sentences.length / 5)} calls before)`)
         
-        const themesContext = extractedThemes ? 
-          `\n\nIdentified themes in this text: ${extractedThemes.map(t => t.name).join(', ')}` : ''
+        const allResults = []
         
-        const conjugationInstruction = includeConjugations ? `
-        
+        for (let chunkIndex = 0; chunkIndex < chunks.length; chunkIndex++) {
+          const chunk = chunks[chunkIndex]
+          console.log(`Processing chunk ${chunkIndex + 1}/${chunks.length} with ${chunk.length} sentences`)
+          
+          const sentencesText = chunk.map((s, idx) => 
+            `Sentence ${idx + 1}: "${s.text}"\nWords to analyze: ${s.words.map(w => `"${w}"`).join(', ')}`
+          ).join('\n\n')
+          
+          const themesContext = extractedThemes ? 
+            `\n\nIdentified themes in this text: ${extractedThemes.map(t => t.name).join(', ')}` : ''
+          
+          const conjugationInstruction = includeConjugations ? `
+          
 For VERBS ONLY, also include basic conjugation information:
 "conjugationHint": {
   "presentSG3": "er/sie/es form",
   "pastSG1": "ich past form", 
   "imperativeSG": "du imperative form"
 }` : ''
-        
-        console.log(`Processing ${sentences.length} sentences with Gemini...`)
-        
-        const prompt = `Analyze all words in these German sentences:
+          
+          const prompt = `Analyze all words in these German sentences:
 
 ${sentencesText}${themesContext}
 
@@ -231,21 +268,58 @@ For each word, identify which themes it belongs to based on the identified theme
 
 Provide analysis for each sentence and its words. Return ONLY valid JSON, no additional text, explanations, or markdown code block formatting.`
 
-        const result = await model.generateContent(prompt)
-        const response = await result.response
-        const analysisText = response.text().trim()
+          try {
+            const result = await model.generateContent(prompt)
+            const response = await result.response
+            const analysisText = response.text().trim()
+            
+            const cleanJson = extractJsonFromResponse(analysisText)
+            const analysis = JSON.parse(cleanJson)
+            
+            if (analysis.sentences) {
+              allResults.push(...analysis.sentences)
+              console.log(`Successfully processed chunk ${chunkIndex + 1}, got ${analysis.sentences.length} sentences`)
+            }
+            
+            // Small delay to respect rate limits
+            if (chunkIndex < chunks.length - 1) {
+              await new Promise(resolve => setTimeout(resolve, 100))
+            }
+            
+          } catch (chunkError) {
+            console.error(`Error processing chunk ${chunkIndex + 1}:`, chunkError)
+            
+            // Fallback for this chunk
+            const fallbackSentences = chunk.map(s => ({
+              sentenceTranslation: `[Translation of: ${s.text}]`,
+              words: Object.fromEntries(s.words.map(word => [word, {
+                baseForm: word,
+                wordType: "ADVERB",
+                level: "A2",
+                translation: `[Translation of: ${word}]`,
+                themes: ["General"],
+                grammaticalInfo: {
+                  gender: null,
+                  case: null,
+                  tense: null,
+                  person: null,
+                  number: null,
+                  adverbType: "other"
+                }
+              }]))
+            }))
+            
+            allResults.push(...fallbackSentences)
+          }
+        }
         
-        console.log("Gemini batch analysis response received, length:", analysisText.length)
+        console.log(`Batch analysis complete: processed ${allResults.length} sentences using ${chunks.length} API calls`)
+        return { sentences: allResults }
         
-        const cleanJson = extractJsonFromResponse(analysisText)
-        const analysis = JSON.parse(cleanJson)
-        
-        console.log(`Successfully parsed batch analysis for ${analysis.sentences?.length || 0} sentences`)
-        return analysis
       } catch (error) {
-        console.error("Error batch analyzing text with Gemini:", error)
-        console.log("Sentences that failed:", sentences.map(s => s.text))
+        console.error("Error in batch analyzing entire text:", error)
         
+        // Complete fallback
         const fallbackAnalysis = {
           sentences: sentences.map(s => ({
             sentenceTranslation: `[Translation of: ${s.text}]`,
@@ -267,9 +341,21 @@ Provide analysis for each sentence and its words. Return ONLY valid JSON, no add
           }))
         }
         
-        console.log("Using fallback analysis for", sentences.length, "sentences")
+        console.log("Using complete fallback analysis")
         return fallbackAnalysis
       }
+    },
+
+    // LEGACY: Keep the old method for backward compatibility but optimize it
+    batchAnalyzeText: async (
+      sentences: Array<{text: string, words: string[]}>, 
+      extractedThemes?: any[], 
+      includeConjugations: boolean = false
+    ) => {
+      console.log("⚠️  Using legacy batchAnalyzeText. Consider using batchAnalyzeEntireText for better efficiency!")
+      
+      // Use the optimized method with smaller batches for compatibility
+      return this.batchAnalyzeEntireText(sentences, extractedThemes, includeConjugations, 100)
     },
 
     analyzeSentence: async (sentence: string, words: string[]) => {
