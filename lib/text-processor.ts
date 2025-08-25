@@ -322,6 +322,8 @@ export async function processGermanText(text: string, title: string, userId: str
   console.log("Extracting themes from text...")
   const themeExtraction = await translator.extractThemes(text, title)
   result.themes = themeExtraction.themes
+  console.log("Waiting 4 seconds to respect rate limits...")
+  await new Promise(resolve => setTimeout(resolve, 4000)) // 4 second delay
   
   // Create or find existing themes in database
   const createdThemeIds = await createOrFindThemes(themeExtraction.themes)
@@ -335,15 +337,18 @@ export async function processGermanText(text: string, title: string, userId: str
     text: sentence.text,
     words: sentence.words.filter(word => word && word.length > 0)
   }))
+  console.log("Waiting 4 seconds before batch analysis...")
+  await new Promise(resolve => setTimeout(resolve, 4000)) // 4 second delay
 
   // Use the optimized batch analyzer with larger chunks
-  const maxWordsPerBatch = 400 // Adjust based on your API limits
+  const maxWordsPerBatch = 150 // Adjust based on your API limits
   const batchAnalysis = await translator.batchAnalyzeEntireText(
     sentenceData, 
     result.themes, 
     true, // Include conjugations for efficiency
     maxWordsPerBatch
   )
+  await new Promise(resolve => setTimeout(resolve, 2000)) // 2 second delay
 
   console.log(`Batch analysis complete, processing ${batchAnalysis.sentences.length} sentences...`)
 
