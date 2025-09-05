@@ -135,12 +135,14 @@ export default function SavedTextsSection() {
       if (!text.content || !text.words || text.words.length === 0) {
         console.log('Fetching full text data for:', text.id)
         
-        const response = await fetch(`/api/saved-texts/${text.id}`)
+        // Add userId query parameter that the API expects
+        const response = await fetch(`/api/saved-texts/${text.id}?userId=${userId}`)
         if (response.ok) {
           const fullTextData = await response.json()
+          console.log('Fetched full text data:', fullTextData)
           setSelectedText(fullTextData)
         } else {
-          console.error('Failed to fetch full text data')
+          console.error('Failed to fetch full text data:', response.status, response.statusText)
           setSelectedText(text)
         }
       } else {

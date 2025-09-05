@@ -36,8 +36,8 @@ export async function POST(request: NextRequest) {
 
     console.log(`Target translation: ${targetTranslation}`);
 
-    // Generate distractors based on word type and user's vocabulary
-    const distractors = await generateTypeSpecificDistractors(baseForm, type, session.user.id);
+    // Generate distractors with improved randomization
+    const distractors = await generateRandomizedDistractors(baseForm, type, session.user.id, targetTranslation);
     
     console.log(`Generated ${distractors.length} distractors:`, distractors.map(d => d.text));
 
@@ -109,144 +109,262 @@ async function getWordFromDatabase(baseForm: string, type: string, userId: strin
   }
 }
 
-async function generateTypeSpecificDistractors(
+async function generateRandomizedDistractors(
   targetWord: string, 
   type: string, 
-  userId: string
+  userId: string,
+  targetTranslation: string
 ): Promise<Array<{ text: string; source: string }>> {
   const distractors: Array<{ text: string; source: string }> = [];
+  const usedTranslations = new Set([targetTranslation.toLowerCase()]);
   
   try {
-    // First priority: Get words of the same type from user's vocabulary
-    const userWords = await prisma.extractedWord.findMany({
-      where: {
-        type: type,
-        NOT: { baseForm: { equals: targetWord, mode: 'insensitive' } },
-        savedText: { userId: userId },
-        translation: { not: null }
-      },
-      take: 5,
-      orderBy: {
-        dateAdded: 'desc' // Prefer recently learned words
-      }
-    });
+    // Strategy 1: Random selection from user's vocabulary with the same type
+    const userWords = await getRandomUserWords(targetWord, type, userId, 15); // Get more words to choose from
+    
+    // Randomly select from user's words
+    const shuffledUserWords = userWords
+      .filter(word => word.translation && !usedTranslations.has(word.translation.toLowerCase()))
+      .sort(() => Math.random() - 0.5) // Randomize order
+      .slice(0, 3); // Take up to 3
 
-    userWords.forEach(word => {
-      if (word.translation && distractors.length < 3) {
+    shuffledUserWords.forEach(word => {
+      if (word.translation && distractors.length < 3 && !usedTranslations.has(word.translation.toLowerCase())) {
         distractors.push({
           text: word.translation,
           source: 'user_vocabulary'
         });
+        usedTranslations.add(word.translation.toLowerCase());
       }
     });
 
     console.log(`Found ${distractors.length} distractors from user vocabulary`);
 
-    // Second priority: Get words from theme categories of the same type
+    // Strategy 2: Random theme words of the same type
     if (distractors.length < 3) {
-      const themeWords = await prisma.themeCategoryWord.findMany({
-        where: {
-          type: type,
-          NOT: { text: { equals: targetWord, mode: 'insensitive' } },
-          translation: { not: null }
-        },
-        take: 5 - distractors.length,
-        orderBy: {
-          text: 'asc'
-        }
-      });
+      const themeWords = await getRandomThemeWords(targetWord, type, 10);
+      
+      const shuffledThemeWords = themeWords
+        .filter(word => word.translation && !usedTranslations.has(word.translation.toLowerCase()))
+        .sort(() => Math.random() - 0.5)
+        .slice(0, 3 - distractors.length);
 
-      themeWords.forEach(word => {
-        if (distractors.length < 3) {
+      shuffledThemeWords.forEach(word => {
+        if (distractors.length < 3 && !usedTranslations.has(word.translation.toLowerCase())) {
           distractors.push({
             text: word.translation,
             source: 'theme_vocabulary'
           });
+          usedTranslations.add(word.translation.toLowerCase());
         }
       });
 
-      console.log(`Added ${themeWords.length} distractors from theme vocabulary`);
+      console.log(`Added ${shuffledThemeWords.length} distractors from theme vocabulary`);
     }
 
-    // Third priority: Type-specific fallback options
+    // Strategy 3: Mixed type words from user's vocabulary (if same-type not enough)
     if (distractors.length < 3) {
-      const typeSpecificFallbacks = getTypeSpecificFallbacks(type);
+      const mixedUserWords = await getRandomMixedUserWords(targetWord, userId, 10);
+      
+      const shuffledMixedWords = mixedUserWords
+        .filter(word => word.translation && !usedTranslations.has(word.translation.toLowerCase()))
+        .sort(() => Math.random() - 0.5)
+        .slice(0, 3 - distractors.length);
+
+      shuffledMixedWords.forEach(word => {
+        if (distractors.length < 3 && !usedTranslations.has(word.translation.toLowerCase())) {
+          distractors.push({
+            text: word.translation,
+            source: 'mixed_user_vocabulary'
+          });
+          usedTranslations.add(word.translation.toLowerCase());
+        }
+      });
+
+      console.log(`Added ${shuffledMixedWords.length} distractors from mixed user vocabulary`);
+    }
+
+    // Strategy 4: Randomized type-specific fallbacks
+    if (distractors.length < 3) {
+      const typeSpecificFallbacks = getRandomizedTypeSpecificFallbacks(type, targetTranslation, 5);
       
       typeSpecificFallbacks.forEach(fallback => {
-        if (distractors.length < 3) {
+        if (distractors.length < 3 && !usedTranslations.has(fallback.toLowerCase())) {
           distractors.push({
             text: fallback,
-            source: 'fallback'
+            source: 'type_fallback'
           });
+          usedTranslations.add(fallback.toLowerCase());
         }
       });
 
-      console.log(`Added ${typeSpecificFallbacks.length} fallback distractors`);
+      console.log(`Added ${typeSpecificFallbacks.length} type-specific fallback distractors`);
     }
 
-    // Final fallback: Generic options
+    // Strategy 5: Final random fallbacks
     if (distractors.length < 3) {
-      const genericFallbacks = ['House', 'Car', 'Book', 'Water', 'Food'];
+      const finalFallbacks = getRandomizedGenericFallbacks(targetTranslation, usedTranslations);
       
-      genericFallbacks.forEach(fallback => {
+      finalFallbacks.forEach(fallback => {
         if (distractors.length < 3) {
           distractors.push({
             text: fallback,
-            source: 'generic_fallback'
+            source: 'final_fallback'
           });
         }
       });
 
-      console.log(`Added generic fallbacks, total distractors: ${distractors.length}`);
+      console.log(`Added final fallbacks, total distractors: ${distractors.length}`);
     }
 
-    return distractors.slice(0, 3); // Ensure we only return 3 distractors
+    return distractors.slice(0, 3);
 
   } catch (error) {
     console.error('Error generating distractors:', error);
     
-    // Emergency fallback
-    return [
-      { text: 'House', source: 'emergency' },
-      { text: 'Car', source: 'emergency' },
-      { text: 'Book', source: 'emergency' }
-    ];
+    // Emergency fallback with randomization
+    const emergency = ['House', 'Car', 'Book', 'Water', 'Food', 'Tree', 'Dog', 'Cat', 'Sun', 'Moon']
+      .filter(word => word.toLowerCase() !== targetTranslation.toLowerCase())
+      .sort(() => Math.random() - 0.5)
+      .slice(0, 3);
+      
+    return emergency.map(text => ({ text, source: 'emergency' }));
   }
 }
 
-function getTypeSpecificFallbacks(type: string): string[] {
+// New helper function for random user words
+async function getRandomUserWords(targetWord: string, type: string, userId: string, limit: number) {
+  try {
+    // Use raw SQL for better randomization
+    const randomUserWords = await prisma.$queryRaw`
+      SELECT "baseForm", "type", "translation"
+      FROM "ExtractedWord" ew
+      JOIN "SavedText" st ON ew."savedTextId" = st.id
+      WHERE st."userId" = ${userId}
+        AND ew."type" = ${type}
+        AND LOWER(ew."baseForm") != LOWER(${targetWord})
+        AND ew."translation" IS NOT NULL
+        AND ew."translation" != ''
+      ORDER BY RANDOM()
+      LIMIT ${limit}
+    ` as Array<{ baseForm: string; type: string; translation: string }>;
+
+    return randomUserWords;
+  } catch (error) {
+    console.error('Error getting random user words:', error);
+    return [];
+  }
+}
+
+// New helper function for random theme words
+async function getRandomThemeWords(targetWord: string, type: string, limit: number) {
+  try {
+    const randomThemeWords = await prisma.$queryRaw`
+      SELECT "text", "type", "translation"
+      FROM "ThemeCategoryWord"
+      WHERE "type" = ${type}
+        AND LOWER("text") != LOWER(${targetWord})
+        AND "translation" IS NOT NULL
+        AND "translation" != ''
+      ORDER BY RANDOM()
+      LIMIT ${limit}
+    ` as Array<{ text: string; type: string; translation: string }>;
+
+    return randomThemeWords;
+  } catch (error) {
+    console.error('Error getting random theme words:', error);
+    return [];
+  }
+}
+
+// New helper function for mixed user words (different types)
+async function getRandomMixedUserWords(targetWord: string, userId: string, limit: number) {
+  try {
+    const randomMixedWords = await prisma.$queryRaw`
+      SELECT "baseForm", "type", "translation"
+      FROM "ExtractedWord" ew
+      JOIN "SavedText" st ON ew."savedTextId" = st.id
+      WHERE st."userId" = ${userId}
+        AND LOWER(ew."baseForm") != LOWER(${targetWord})
+        AND ew."translation" IS NOT NULL
+        AND ew."translation" != ''
+      ORDER BY RANDOM()
+      LIMIT ${limit}
+    ` as Array<{ baseForm: string; type: string; translation: string }>;
+
+    return randomMixedWords;
+  } catch (error) {
+    console.error('Error getting random mixed words:', error);
+    return [];
+  }
+}
+
+function getRandomizedTypeSpecificFallbacks(type: string, targetTranslation: string, count: number): string[] {
+  let fallbacks: string[] = [];
+  
   switch (type.toUpperCase()) {
     case 'VERB':
-      return [
-        'to run', 'to eat', 'to sleep', 'to walk', 'to speak', 
-        'to read', 'to write', 'to think', 'to play', 'to work'
+      fallbacks = [
+        'to run', 'to eat', 'to sleep', 'to walk', 'to speak', 'to read', 'to write', 
+        'to think', 'to play', 'to work', 'to sing', 'to dance', 'to cook', 'to drive',
+        'to learn', 'to teach', 'to help', 'to buy', 'to sell', 'to travel'
       ];
+      break;
     
     case 'NOUN':
-      return [
-        'house', 'car', 'book', 'table', 'chair', 
-        'dog', 'cat', 'tree', 'flower', 'water'
+      fallbacks = [
+        'house', 'car', 'book', 'table', 'chair', 'dog', 'cat', 'tree', 'flower', 
+        'water', 'bread', 'milk', 'phone', 'computer', 'school', 'hospital',
+        'restaurant', 'park', 'beach', 'mountain'
       ];
+      break;
     
     case 'ADJ':
     case 'ADJECTIVE':
-      return [
-        'big', 'small', 'red', 'blue', 'fast', 
-        'slow', 'hot', 'cold', 'good', 'bad'
+      fallbacks = [
+        'big', 'small', 'red', 'blue', 'fast', 'slow', 'hot', 'cold', 'good', 'bad',
+        'beautiful', 'ugly', 'smart', 'stupid', 'happy', 'sad', 'young', 'old',
+        'rich', 'poor'
       ];
+      break;
     
     case 'ADVERB':
-      return [
-        'quickly', 'slowly', 'carefully', 'loudly', 'quietly', 
-        'here', 'there', 'now', 'later', 'always'
+      fallbacks = [
+        'quickly', 'slowly', 'carefully', 'loudly', 'quietly', 'here', 'there',
+        'now', 'later', 'always', 'never', 'sometimes', 'often', 'rarely',
+        'everywhere', 'nowhere', 'today', 'tomorrow', 'yesterday', 'well'
       ];
+      break;
     
     default:
-      return [
-        'house', 'car', 'book', 'water', 'food',
-        'big', 'small', 'to run', 'quickly', 'here'
+      fallbacks = [
+        'house', 'car', 'book', 'water', 'food', 'big', 'small', 'to run', 
+        'quickly', 'here', 'good', 'bad', 'tree', 'dog', 'cat'
       ];
   }
+
+  // Filter out the target translation and randomize
+  return fallbacks
+    .filter(word => word.toLowerCase() !== targetTranslation.toLowerCase())
+    .sort(() => Math.random() - 0.5)
+    .slice(0, count);
+}
+
+function getRandomizedGenericFallbacks(targetTranslation: string, usedTranslations: Set<string>): string[] {
+  const generic = [
+    'House', 'Car', 'Book', 'Water', 'Food', 'Tree', 'Dog', 'Cat', 'Sun', 'Moon',
+    'Red', 'Blue', 'Big', 'Small', 'Good', 'Bad', 'Fast', 'Slow', 'Hot', 'Cold',
+    'to go', 'to see', 'to have', 'to be', 'to do', 'to get', 'to make', 'to take',
+    'quickly', 'slowly', 'well', 'here', 'there', 'now', 'always', 'never'
+  ];
+
+  return generic
+    .filter(word => 
+      word.toLowerCase() !== targetTranslation.toLowerCase() && 
+      !usedTranslations.has(word.toLowerCase())
+    )
+    .sort(() => Math.random() - 0.5)
+    .slice(0, 3);
 }
 
 export async function GET(request: NextRequest) {
@@ -259,7 +377,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({
       success: true,
       supportedTypes: ['VERB', 'NOUN', 'ADJ', 'ADVERB'],
-      message: 'Quiz generation service is available'
+      message: 'Quiz generation service is available with improved randomization'
     });
 
   } catch (error) {
