@@ -335,12 +335,11 @@ export async function fetchSavedTexts(userId: string) {
 }
 
 // Function to fetch a single saved text by ID
+// Function to fetch a single saved text by ID
 export async function fetchSavedTextById(textId: number, userId: string) {
   try {
     const text = await prisma.savedText.findFirst({
       where: {
-              // @ts-ignore
-
         id: textId,
         userId,
       },
@@ -351,12 +350,7 @@ export async function fetchSavedTextById(textId: number, userId: string) {
             verb: true,
             noun: true,
             adjective: true,
-            // @ts-ignore
-            practicedWords: {
-              where: {
-                userId: userId,
-              },
-            },
+            adverb: true,
           },
         },
       },
@@ -366,34 +360,72 @@ export async function fetchSavedTextById(textId: number, userId: string) {
       return null
     }
 
+    // Get practiced words separately - using the correct schema structure
+    const practicedWords = await prisma.practicedWord.findMany({
+      where: {
+        userId: userId,
+        // We need to match by baseForm and type since there's no direct extractedWordId
+        OR: text.extractedWords.map(word => ({
+          baseForm: word.baseForm,
+          type: word.type,
+          languageCode: word.languageCode || 'de'
+        }))
+      },
+      select: {
+        baseForm: true,
+        type: true,
+        practiced: true,
+        lastPracticed: true,
+        timesCorrect: true,
+        timesWrong: true
+      }
+    });
+
+    // Create a lookup map for practiced words
+    const practicedWordMap = new Map();
+    practicedWords.forEach(pw => {
+      const key = `${pw.baseForm.toLowerCase()}_${pw.type}`;
+      practicedWordMap.set(key, pw);
+    });
+
     // Transform database model to application model
-    // @ts-ignore
-    const words = text.extractedWords.map((word) => ({
-      id: Number(word.id),
-      text: word.originalForm || word.baseForm,
-      baseForm: word.baseForm,
-      type: word.type,
-      level: word.level || "Unknown",
-      translation: word.translation || "",
-      gender: word.gender,
-      case: word.case,
-      tense: word.tense,
-      practiced: word.practicedWords.length > 0, // Check if this word has been practiced
-      isNew: word.isNew,
-      isRepeat: word.isRepeat || false, // Include the isRepeat flag
-      appearsInOtherTexts: false, // This would need additional query
-      occurrences: [
-        {
-          textTitle: text.title,
-          date: text.dateAdded.toISOString(),
-          sentence: word.sentence || "",
-          translation: word.sentenceTranslation || "",
-        },
-      ],
-      verbId: word.verbId,
-      nounId: word.nounId,
-      adjectiveId: word.adjectiveId,
-    }))
+    const words = text.extractedWords.map((word) => {
+      const practiceKey = `${word.baseForm.toLowerCase()}_${word.type}`;
+      const practiceData = practicedWordMap.get(practiceKey);
+
+      return {
+        id: Number(word.id),
+        text: word.originalForm || word.baseForm,
+        baseForm: word.baseForm,
+        type: word.type,
+        level: word.level || "Unknown",
+        translation: word.translation || "",
+        gender: word.gender,
+        case: word.case,
+        tense: word.tense,
+        practiced: practiceData?.practiced || false,
+        isNew: word.isNew,
+        isKnown: word.isKnown || !word.isNew, // Use isKnown field or derive from isNew
+        isRepeat: word.isRepeat || false,
+        appearsInOtherTexts: false, // This would need additional query if needed
+        occurrences: [
+          {
+            textTitle: text.title,
+            date: text.dateAdded.toISOString(),
+            sentence: word.sentence || "",
+            translation: word.sentenceTranslation || "",
+          },
+        ],
+        verbId: word.verbId,
+        nounId: word.nounId,
+        adjectiveId: word.adjectiveId,
+        adverbId: word.adverbId,
+        // Add practice stats if available
+        timesCorrect: practiceData?.timesCorrect || 0,
+        timesWrong: practiceData?.timesWrong || 0,
+        lastPracticed: practiceData?.lastPracticed?.toISOString() || null,
+      }
+    })
 
     return {
       id: Number(text.id),
@@ -404,32 +436,21 @@ export async function fetchSavedTextById(textId: number, userId: string) {
       wordCount: text.wordCount,
       readingTime: text.readingTime,
       content: text.content,
-      // @ts-ignore
+      language: text.language,
+      languageCode: text.languageCode,
       stats: text.stats
         ? {
-          // @ts-ignore
             totalWords: text.stats.totalWords,
-            // @ts-ignore
             verbs: text.stats.verbs,
-            // @ts-ignore
             nouns: text.stats.nouns,
-            // @ts-ignore
             adjectives: text.stats.adjectives,
-            // @ts-ignore
             adverbs: text.stats.adverbs,
-            // @ts-ignore
             newWords: text.stats.newWords,
-            // @ts-ignore
             practicedWords: text.stats.practicedWords,
-            // @ts-ignore
             knownFromOtherTexts: text.stats.knownFromOtherTexts,
-            // @ts-ignore
             levelA1: text.stats.levelA1,
-            // @ts-ignore
             levelA2: text.stats.levelA2,
-            // @ts-ignore
             levelB1: text.stats.levelB1,
-            // @ts-ignore
             levelB2Plus: text.stats.levelB2Plus,
           }
         : {
