@@ -1,9 +1,54 @@
-// API route to generate AI practice content with target words
+// Updated app/api/practice/generate-content/route.ts - Dynamic language support
 import { NextRequest, NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { createTranslator } from '@/lib/translator'
+import { prisma } from '@/lib/db'
 import type { WordTarget } from '@/lib/practice-engine'
+
+// Get user's language settings
+async function getUserLanguageSettings(userId: string) {
+  try {
+    const languageSettings = await prisma.languageSettings.findUnique({
+      where: { userId }
+    })
+
+    if (languageSettings) {
+      return {
+        languageCode: languageSettings.languageCode,
+        translationCode: languageSettings.translationCode,
+        learningLanguage: languageSettings.learningLanguage,
+        nativeLanguage: languageSettings.nativeLanguage
+      }
+    }
+
+    // Fallback to user's basic language settings
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      select: {
+        languageCode: true,
+        translationCode: true,
+        learningLanguage: true,
+        nativeLanguage: true
+      }
+    })
+
+    return {
+      languageCode: user?.languageCode || 'de',
+      translationCode: user?.translationCode || 'en',
+      learningLanguage: user?.learningLanguage || 'German',
+      nativeLanguage: user?.nativeLanguage || 'English'
+    }
+  } catch (error) {
+    console.error('Error getting user language settings:', error)
+    return {
+      languageCode: 'de',
+      translationCode: 'en',
+      learningLanguage: 'German',
+      nativeLanguage: 'English'
+    }
+  }
+}
 
 export async function POST(request: NextRequest) {
   try {
@@ -42,9 +87,15 @@ export async function POST(request: NextRequest) {
       )
     }
 
+    // Get user's language settings
+    const languageSettings = await getUserLanguageSettings(session.user.id)
+    const { languageCode, translationCode, learningLanguage, nativeLanguage } = languageSettings
+
+    console.log(`Generating content for ${learningLanguage} (${languageCode}) with ${targetWords.length} target words`)
+
     const translator = createTranslator()
 
-    // Generate content using AI
+    // Generate content using AI with dynamic language support
     const generatedContent = await generatePracticeContent({
       targetWords,
       theme,
@@ -52,20 +103,23 @@ export async function POST(request: NextRequest) {
       userLevel,
       difficulty,
       length,
-      translator
+      translator,
+      languageSettings
     })
 
     // Parse the generated content and identify word positions
     const parsedContent = await parseContentWithWordPositions(
-      generatedContent.german,
+      generatedContent.learningText,
       targetWords
     )
 
     const response = {
       sessionId,
       content: {
-        german: generatedContent.german,
-        english: generatedContent.english,
+        [languageCode]: generatedContent.learningText, // Dynamic language field
+        german: generatedContent.learningText, // Keep for backward compatibility
+        [translationCode]: generatedContent.translationText, // Dynamic translation field
+        english: generatedContent.translationText, // Keep for backward compatibility
         words: parsedContent.words,
         sentences: parsedContent.sentences
       },
@@ -73,7 +127,11 @@ export async function POST(request: NextRequest) {
         wordCount: parsedContent.words.length,
         targetWordsUsed: parsedContent.words.filter(w => w.isTarget).length,
         difficultyScore: calculateDifficultyScore(parsedContent.words),
-        estimatedReadingTime: Math.ceil(generatedContent.german.split(' ').length / 150)
+        estimatedReadingTime: Math.ceil(generatedContent.learningText.split(' ').length / 150),
+        languageCode,
+        translationCode,
+        learningLanguage,
+        nativeLanguage
       }
     }
 
@@ -91,7 +149,7 @@ export async function POST(request: NextRequest) {
   }
 }
 
-// FIXED: Generate content using AI with specific target words
+// Enhanced content generation with dynamic language support
 async function generatePracticeContent({
   targetWords,
   theme,
@@ -99,7 +157,8 @@ async function generatePracticeContent({
   userLevel,
   difficulty,
   length,
-  translator
+  translator,
+  languageSettings
 }: {
   targetWords: WordTarget[]
   theme: string
@@ -108,7 +167,10 @@ async function generatePracticeContent({
   difficulty: string
   length: number
   translator: any
+  languageSettings: any
 }) {
+  const { languageCode, translationCode, learningLanguage, nativeLanguage } = languageSettings
+  
   const targetWordsList = targetWords.map(w => w.baseForm).join(', ')
   const knownWords = targetWords.filter(w => w.isKnown).map(w => w.baseForm).join(', ')
   
@@ -137,50 +199,107 @@ async function generatePracticeContent({
       difficultyInstructions = 'Use complex sentence structures and varied vocabulary'
       break
   }
-  const lengthInstructions = `Length: ${length} words` 
-  const prompt = `${stylePrompt} in German about "${theme}" for ${userLevel} level learners.
+
+  const lengthInstructions = `Length: approximately ${length} words`
+  
+  // Dynamic prompt based on learning language
+  const prompt = `${stylePrompt} in ${learningLanguage} about "${theme}" for ${userLevel} level learners.
 
   MANDATORY REQUIREMENTS:
   - Must include ALL these target words naturally: ${targetWordsList}
   - ${difficultyInstructions}
   - ${lengthInstructions}
   - Make the context clear so word meanings are obvious
-  - The text must be about the theme of "${theme}".
+  - The text must be about the theme of "${theme}"
   - Use these familiar words when possible: ${knownWords}
+  - Write in proper ${learningLanguage} with correct grammar and natural flow
   
   Additional guidelines:
   - Create a coherent, engaging narrative
   - Use target words in contexts that make their meaning clear
-  - Ensure natural German grammar and flow
-  - Level-appropriate vocabulary and structures
+  - Ensure natural ${learningLanguage} grammar and flow
+  - Level-appropriate vocabulary and structures for ${userLevel} learners
+  - Make the content culturally appropriate and interesting
   
-  Write ONLY the German text, no explanations or formatting.`
+  Write ONLY the ${learningLanguage} text, no explanations or formatting.`
 
   try {
-    // Use the new generateContent method instead of translate
-    const germanText = await translator.generateContent(prompt)
+    console.log(`Generating ${learningLanguage} content...`)
+    const learningText = await translator.generateContent(prompt)
     
-    // Generate English translation
-    const englishText = await translator.translate(germanText, { from: 'de', to: 'en' })
+    console.log(`Translating to ${nativeLanguage}...`)
+    const translationText = await translator.translate(learningText, { 
+      from: languageCode, 
+      to: translationCode 
+    })
 
     return {
-      german: germanText,
-      english: englishText
+      learningText,
+      translationText
     }
   } catch (error) {
-    console.error('Error with AI content generation:', error)
+    console.error(`Error with AI content generation for ${learningLanguage}:`, error)
     
-    // Fallback content
+    // Fallback content with dynamic language
+    const fallbackMap: Record<string, any> = {
+      de: {
+        text: `Ein kurzer Text über ${theme}. Hier sind einige wichtige Wörter: ${targetWordsList}. Dies ist ein Beispieltext für Übungszwecke.`,
+        translation: `A short text about ${theme}. Here are some important words: ${targetWordsList}. This is an example text for practice purposes.`
+      },
+      es: {
+        text: `Un texto corto sobre ${theme}. Aquí están algunas palabras importantes: ${targetWordsList}. Este es un texto de ejemplo para practicar.`,
+        translation: `A short text about ${theme}. Here are some important words: ${targetWordsList}. This is an example text for practice purposes.`
+      },
+      fr: {
+        text: `Un texte court sur ${theme}. Voici quelques mots importants: ${targetWordsList}. Ceci est un texte d'exemple à des fins de pratique.`,
+        translation: `A short text about ${theme}. Here are some important words: ${targetWordsList}. This is an example text for practice purposes.`
+      },
+      it: {
+        text: `Un testo breve su ${theme}. Ecco alcune parole importanti: ${targetWordsList}. Questo è un testo di esempio per la pratica.`,
+        translation: `A short text about ${theme}. Here are some important words: ${targetWordsList}. This is an example text for practice purposes.`
+      },
+      pt: {
+        text: `Um texto curto sobre ${theme}. Aqui estão algumas palavras importantes: ${targetWordsList}. Este é um texto de exemplo para prática.`,
+        translation: `A short text about ${theme}. Here are some important words: ${targetWordsList}. This is an example text for practice purposes.`
+      },
+      tr: {
+        text: `${theme} hakkında kısa bir metin. İşte bazı önemli kelimeler: ${targetWordsList}. Bu pratik amaçlı örnek bir metindir.`,
+        translation: `A short text about ${theme}. Here are some important words: ${targetWordsList}. This is an example text for practice purposes.`
+      },
+      nl: {
+        text: `Een korte tekst over ${theme}. Hier zijn enkele belangrijke woorden: ${targetWordsList}. Dit is een voorbeeldtekst voor oefening.`,
+        translation: `A short text about ${theme}. Here are some important words: ${targetWordsList}. This is an example text for practice purposes.`
+      },
+      sv: {
+        text: `En kort text om ${theme}. Här är några viktiga ord: ${targetWordsList}. Detta är en exempeltext för övning.`,
+        translation: `A short text about ${theme}. Here are some important words: ${targetWordsList}. This is an example text for practice purposes.`
+      },
+      no: {
+        text: `En kort tekst om ${theme}. Her er noen viktige ord: ${targetWordsList}. Dette er en eksempeltekst for øvelse.`,
+        translation: `A short text about ${theme}. Here are some important words: ${targetWordsList}. This is an example text for practice purposes.`
+      },
+      da: {
+        text: `En kort tekst om ${theme}. Her er nogle vigtige ord: ${targetWordsList}. Dette er en eksempeltekst til øvelse.`,
+        translation: `A short text about ${theme}. Here are some important words: ${targetWordsList}. This is an example text for practice purposes.`
+      },
+      fi: {
+        text: `Lyhyt teksti aiheesta ${theme}. Tässä on joitakin tärkeitä sanoja: ${targetWordsList}. Tämä on esimerkkiteksti harjoittelua varten.`,
+        translation: `A short text about ${theme}. Here are some important words: ${targetWordsList}. This is an example text for practice purposes.`
+      }
+    }
+
+    const fallback = fallbackMap[languageCode] || fallbackMap.de
+    
     return {
-      german: `Ein kurzer Text über ${theme}. Hier sind einige wichtige Wörter: ${targetWordsList}. Dies ist ein Beispieltext für Übungszwecke.`,
-      english: `A short text about ${theme}. Here are some important words: ${targetWordsList}. This is an example text for practice purposes.`
+      learningText: fallback.text,
+      translationText: fallback.translation
     }
   }
 }
 
-// Parse content and identify word positions
+// Parse content and identify word positions (language-agnostic)
 async function parseContentWithWordPositions(
-  germanText: string,
+  learningText: string,
   targetWords: WordTarget[]
 ) {
   const words: Array<{
@@ -193,7 +312,7 @@ async function parseContentWithWordPositions(
     showTranslation: boolean
   }> = []
 
-  const sentences = germanText.split(/[.!?]+/).filter(s => s.trim().length > 0)
+  const sentences = learningText.split(/[.!?]+/).filter(s => s.trim().length > 0)
   
   // Create a map of target words for quick lookup
   const targetWordMap = new Map(
@@ -201,7 +320,8 @@ async function parseContentWithWordPositions(
   )
 
   let currentPosition = 0
-  const cleanText = germanText.replace(/[^\w\säöüßÄÖÜ]/g, ' ')
+  // Language-agnostic character handling for multiple European languages
+  const cleanText = learningText.replace(/[^\w\säöüßÄÖÜáéíóúñçàèéêëîïôùûüÿæøåğıİçşĞŞıÜÇİÖğüçşıöüÇĞIŞ]/g, ' ')
   const textWords = cleanText.split(/\s+/).filter(w => w.length > 0)
 
   for (const word of textWords) {
@@ -209,7 +329,7 @@ async function parseContentWithWordPositions(
     const targetWord = targetWordMap.get(cleanWord)
     
     // Find actual position in original text
-    const startPos = germanText.toLowerCase().indexOf(cleanWord, currentPosition)
+    const startPos = learningText.toLowerCase().indexOf(cleanWord, currentPosition)
     const endPos = startPos + word.length
 
     if (targetWord) {
@@ -267,6 +387,9 @@ export async function GET(request: NextRequest) {
       )
     }
 
+    // Get user's language settings for response
+    const languageSettings = await getUserLanguageSettings(session.user.id)
+
     return NextResponse.json({
       success: true,
       availableStyles: [
@@ -274,9 +397,10 @@ export async function GET(request: NextRequest) {
         { id: 'conversation', name: 'Conversation', description: 'Natural dialogues between people' },
         { id: 'article', name: 'Article', description: 'Informative texts about topics' }
       ],
-      supportedLevels: ['A1', 'A2', 'B1', 'B2'],
-      maxWords: 200,
-      minWords: 100
+      supportedLevels: ['A1', 'A2', 'B1', 'B2', 'C1', 'C2'],
+      maxWords: 1500,
+      minWords: 80,
+      userLanguageSettings: languageSettings
     })
 
   } catch (error) {

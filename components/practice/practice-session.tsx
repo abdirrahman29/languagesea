@@ -1,4 +1,4 @@
-// Main practice component
+// Updated practice-session.tsx
 "use client"
 
 import { useState, useEffect, useCallback } from "react"
@@ -66,129 +66,163 @@ interface Theme {
   }>
 }
 
+interface SavedText {
+  id: string
+  title: string
+  wordCount: number
+  content: string
+  level: string
+  excerpt?: string
+}
+
 export default function PracticeSession() {
   // Session state
   const [sessionData, setSessionData] = useState<SessionData | null>(null)
   const [isLoading, setIsLoading] = useState(false)
   const [showTranslation, setShowTranslation] = useState(false)
-  const [currentDifficulty, setCurrentDifficulty] = useState<'easy' | 'medium' | 'hard'>('medium');
-  const [currentLength, setCurrentLength] = useState<number>(320); 
+  const [currentDifficulty, setCurrentDifficulty] = useState<'easy' | 'medium' | 'hard'>('medium')
+  const [currentLength, setCurrentLength] = useState<number>(320)
+  const [currentProgress, setCurrentProgress] = useState(0)
+  const [currentProgressStep, setCurrentProgressStep] = useState("")
+  
   // Quiz state
   const [quizData, setQuizData] = useState<QuizData | null>(null)
   const [showQuiz, setShowQuiz] = useState(false)
   
   // Settings state
+  const [practiceSource, setPracticeSource] = useState<'themes' | 'saved-texts'>('themes')
   const [currentTheme, setCurrentTheme] = useState("")
   const [currentStyle, setCurrentStyle] = useState<'conversation' | 'article' | 'story'>('story')
   const [targetWordCount, setTargetWordCount] = useState(6)
   const [availableThemes, setAvailableThemes] = useState<Array<{ name: string; wordCount: number; id: string }>>([])
+  const [savedTexts, setSavedTexts] = useState<SavedText[]>([])
+  const [selectedSavedTexts, setSelectedSavedTexts] = useState<string[]>([])
   const [isLoadingThemes, setIsLoadingThemes] = useState(true)
+  const [isLoadingSavedTexts, setIsLoadingSavedTexts] = useState(false)
 
-  // Load available themes on mount
+  const { data: session } = useSession()
+  const [autoDetectedLevel, setAutoDetectedLevel] = useState("A1")
+  const [levelSetting, setLevelSetting] = useState('auto')
+
+  // Load available themes and saved texts
   useEffect(() => {
-    const loadThemes = async () => {
+    const loadData = async () => {
       try {
         setIsLoadingThemes(true)
-        const response = await fetch('/api/themes')
-        if (response.ok) {
-          const themes: Theme[] = await response.json()
+        
+        // Load themes
+        const themesResponse = await fetch('/api/themes')
+        if (themesResponse.ok) {
+          const themes: Theme[] = await themesResponse.json()
           const formattedThemes = themes.map(theme => ({
             id: theme.id,
             name: theme.name,
             wordCount: theme.words.length
-          })).filter(theme => theme.wordCount >= 4) // Only include themes with enough words
+          })).filter(theme => theme.wordCount >= 4)
           
           setAvailableThemes(formattedThemes)
           
-          // Set default theme to the first available one
           if (formattedThemes.length > 0 && !currentTheme) {
             setCurrentTheme(formattedThemes[0].name)
           }
-        } else {
-          console.error('Failed to fetch themes:', response.statusText)
-          toast.error('Failed to load themes')
         }
+
+        // Load saved texts if user is authenticated
+        if (session?.user?.id) {
+          setIsLoadingSavedTexts(true)
+          const savedTextsResponse = await fetch('/api/saved-texts?limit=100')
+          if (savedTextsResponse.ok) {
+            const data = await savedTextsResponse.json()
+            const texts = data.savedTexts || []
+            setSavedTexts(texts)
+          }
+          setIsLoadingSavedTexts(false)
+        }
+        
       } catch (error) {
-        console.error('Failed to load themes:', error)
-        toast.error('Failed to load themes')
+        console.error('Failed to load data:', error)
+        toast.error('Failed to load practice data')
       } finally {
         setIsLoadingThemes(false)
       }
     }
-    loadThemes()
-  }, [currentTheme])
-  const { data: session } = useSession(); // Get user session data
+    
+    loadData()
+  }, [session?.user?.id, currentTheme])
 
-  // The user's level from the database, e.g., "A2"
-  const [autoDetectedLevel, setAutoDetectedLevel] = useState("A1"); 
-  
-  // The user's selection in the settings dropdown ('auto', 'A1', 'B1', etc.)
-  const [levelSetting, setLevelSetting] = useState('auto'); 
-
-  // Update the auto-detected level when the session loads
   useEffect(() => {
-    if (session?.user?.level) { // Assuming 'level' is part of your session user type
-      setAutoDetectedLevel(session.user.level);
+    if (session?.user?.level) {
+      setAutoDetectedLevel(session.user.level)
     }
-  }, [session]);
-  const effectiveLevel = levelSetting === 'auto' ? autoDetectedLevel : levelSetting;
+  }, [session])
+
+  const effectiveLevel = levelSetting === 'auto' ? autoDetectedLevel : levelSetting
+
+  // Progress tracking function
+  const updateProgress = useCallback((progress: number, step: string) => {
+    setCurrentProgress(progress)
+    setCurrentProgressStep(step)
+  }, [])
 
   // Start new practice session
   const startSession = useCallback(async () => {
-    if (!currentTheme) {
+    if (practiceSource === 'themes' && !currentTheme) {
       toast.error('Please select a theme first')
       return
     }
 
-    const selectedTheme = availableThemes.find(t => t.name === currentTheme)
-    if (!selectedTheme) {
-      toast.error('Selected theme not found')
+    if (practiceSource === 'saved-texts' && selectedSavedTexts.length === 0) {
+      toast.error('Please select at least one saved text')
       return
     }
 
-    // Ensure target word count doesn't exceed available words
-    const actualWordCount = Math.min(targetWordCount, selectedTheme.wordCount)
-    if (actualWordCount < targetWordCount) {
-      toast.info(`Using ${actualWordCount} words (maximum available for this theme)`)
-    }
-
-
     setIsLoading(true)
+    updateProgress(0, "Initializing practice session...")
+
     try {
-      console.log('Starting session with theme:', currentTheme)
+      updateProgress(10, "Preparing vocabulary...")
+
+      // Create session based on source
+      let sessionParams: any = {
+        style: currentStyle,
+        wordCount: targetWordCount,
+        userLevel: effectiveLevel,
+        difficulty: currentDifficulty,
+        length: currentLength
+      }
+
+      if (practiceSource === 'themes') {
+        sessionParams.theme = currentTheme
+        sessionParams.source = 'theme'
+      } else {
+        sessionParams.savedTextIds = selectedSavedTexts
+        sessionParams.source = 'saved-texts'
+      }
+
+      updateProgress(25, "Creating practice session...")
       
       const sessionResponse = await fetch('/api/practice/get-session', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          theme: currentTheme,
-          style: currentStyle,
-          wordCount: targetWordCount,
-          userLevel: effectiveLevel // ✅ PASS THE LEVEL HERE
-
-        })
+        body: JSON.stringify(sessionParams)
       })
-  
+
       if (!sessionResponse.ok) {
         const errorData = await sessionResponse.json()
         throw new Error(errorData.error || 'Failed to create session')
       }
+
+      updateProgress(50, "Generating practice content...")
       
       const sessionResult = await sessionResponse.json()
-      console.log('Session API response:', sessionResult)
-      
       const session = sessionResult.session
-      console.log('Session data:', session)
-      console.log('Target words:', session?.targetWords)
 
       if (!session.targetWords || session.targetWords.length === 0) {
-        throw new Error('No target words available for this theme. Please try a different theme.')
+        throw new Error('No target words available for practice.')
       }
-      const sessionDataFromApi = sessionResult.session;
 
-      if (!sessionDataFromApi.targetWords || sessionDataFromApi.targetWords.length === 0) {
-        throw new Error('No target words available. Please try a different theme.');
-      }
+      updateProgress(75, "Processing content with AI...")
+
       // Generate content
       const contentResponse = await fetch('/api/practice/generate-content', {
         method: 'POST',
@@ -196,19 +230,22 @@ export default function PracticeSession() {
         body: JSON.stringify({
           sessionId: session.id,
           targetWords: session.targetWords,
-          theme: currentTheme,
+          theme: practiceSource === 'themes' ? currentTheme : 'Mixed Content',
           style: currentStyle,
           userLevel: effectiveLevel,
-          difficulty: currentDifficulty, // ✅ PASS DYNAMIC DIFFICULTY
-          length: currentLength, 
-        
+          difficulty: currentDifficulty,
+          length: currentLength,
+          practiceSource,
+          selectedTexts: practiceSource === 'saved-texts' ? selectedSavedTexts : undefined
         })
       })
-  
+
       if (!contentResponse.ok) {
         const errorData = await contentResponse.json()
         throw new Error(errorData.error || 'Failed to generate content')
       }
+
+      updateProgress(90, "Finalizing session...")
       
       const contentResult = await contentResponse.json()
       const content = contentResult.data
@@ -216,7 +253,7 @@ export default function PracticeSession() {
       // Create session data for UI
       const newSessionData: SessionData = {
         id: session.id,
-        theme: currentTheme,
+        theme: practiceSource === 'themes' ? currentTheme : 'Saved Texts',
         style: currentStyle,
         germanText: content.content.german,
         englishText: content.content.english,
@@ -231,6 +268,7 @@ export default function PracticeSession() {
       }
 
       setSessionData(newSessionData)
+      updateProgress(100, "Practice session ready!")
       toast.success('Practice session started!')
 
     } catch (error: any) {
@@ -238,8 +276,12 @@ export default function PracticeSession() {
       toast.error(error.message || 'Failed to start practice session')
     } finally {
       setIsLoading(false)
+      setTimeout(() => {
+        setCurrentProgress(0)
+        setCurrentProgressStep("")
+      }, 2000)
     }
-  }, [currentTheme, currentStyle, targetWordCount])
+  }, [practiceSource, currentTheme, selectedSavedTexts, currentStyle, targetWordCount, effectiveLevel, currentDifficulty, currentLength])
 
   // Handle word click (start quiz)
   const handleWordClick = useCallback(async (baseForm: string, type: string) => {
@@ -343,9 +385,6 @@ export default function PracticeSession() {
     }
   }
 
-
-  // Determine the effective level to send to the API
-
   const getFamiliarityBadge = (familiarity: WordData['familiarity']) => {
     const configs = {
       unknown: { color: 'bg-red-100 text-red-800', label: 'New' },
@@ -365,24 +404,24 @@ export default function PracticeSession() {
         <div className="flex items-center justify-center min-h-[400px]">
           <div className="text-center">
             <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto mb-4"></div>
-            <p className="text-gray-600">Loading themes...</p>
+            <p className="text-gray-600">Loading practice data...</p>
           </div>
         </div>
       </div>
     )
   }
 
-  // Show message if no themes are available
-  if (availableThemes.length === 0) {
+  // Show message if no practice sources are available
+  if (availableThemes.length === 0 && savedTexts.length === 0) {
     return (
       <div className="max-w-7xl mx-auto px-4 py-6">
         <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-6 text-center">
           <BookOpen size={48} className="mx-auto text-yellow-600 mb-4" />
           <h3 className="text-lg font-semibold text-yellow-800 mb-2">
-            No Themes Available
+            No Practice Sources Available
           </h3>
           <p className="text-yellow-700">
-            Please add some themes and vocabulary words to the database before starting practice sessions.
+            Please add some themes and vocabulary words, or process some texts before starting practice sessions.
           </p>
         </div>
       </div>
@@ -394,6 +433,22 @@ export default function PracticeSession() {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Main Content Area */}
         <div className="lg:col-span-2 space-y-6">
+          {/* Loading Progress */}
+          {isLoading && (
+            <div className="bg-white rounded-lg border border-gray-200 p-6">
+              <div className="space-y-4">
+                <div className="flex items-center justify-between">
+                  <h3 className="text-lg font-semibold text-gray-900">
+                    Generating Practice Session
+                  </h3>
+                  <span className="text-sm text-gray-600">{currentProgress}%</span>
+                </div>
+                <Progress value={currentProgress} className="h-2" />
+                <p className="text-sm text-gray-600">{currentProgressStep}</p>
+              </div>
+            </div>
+          )}
+
           {/* Session Header */}
           {sessionData && (
             <div className="bg-white rounded-lg border border-gray-200 p-6">
@@ -494,19 +549,22 @@ export default function PracticeSession() {
             currentTheme={currentTheme}
             currentStyle={currentStyle}
             autoDetectedLevel={autoDetectedLevel}
-      currentLevelSetting={levelSetting}
-      onLevelSettingChange={setLevelSetting} 
+            currentLevelSetting={levelSetting}
+            onLevelSettingChange={setLevelSetting}
             targetWordCount={targetWordCount}
             themes={availableThemes}
+            savedTexts={savedTexts}
+            practiceSource={practiceSource}
+            selectedSavedTexts={selectedSavedTexts}
             onThemeChange={setCurrentTheme}
             onStyleChange={setCurrentStyle}
             onTargetWordCountChange={setTargetWordCount}
             onStartSession={startSession}
             currentLength={currentLength}
-
-            isGenerating={isLoading}
             onLengthChange={setCurrentLength}
-
+            isGenerating={isLoading}
+            onPracticeSourceChange={setPracticeSource}
+            onSelectedSavedTextsChange={setSelectedSavedTexts}
           />
 
           {/* Session Stats */}
@@ -569,7 +627,6 @@ export default function PracticeSession() {
             handleQuizAnswer(optionId, responseTime)
             setShowQuiz(false)
           }}
-       
         />
       )}
     </div>

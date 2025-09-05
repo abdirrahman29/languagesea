@@ -1,4 +1,4 @@
-// AI Practice Engine - Core logic for adaptive German learning
+// Updated practice-engine.ts - Enhanced with saved texts support
 import { prisma } from "@/lib/db"
 
 export interface WordTarget {
@@ -10,6 +10,8 @@ export interface WordTarget {
   isKnown: boolean
   familiarity: 'unknown' | 'learning' | 'familiar' | 'mastered'
   themes: string[]
+  source?: 'theme' | 'saved-text'
+  textId?: string
 }
 
 export interface PracticeSession {
@@ -32,6 +34,8 @@ export interface PracticeSession {
   userLevel: string
   difficulty: 'easy' | 'medium' | 'hard'
   createdAt: Date
+  source: 'theme' | 'saved-texts'
+  savedTextIds?: string[]
 }
 
 export class PracticeEngine {
@@ -56,17 +60,129 @@ export class PracticeEngine {
         return acc
       }, {} as Record<string, number>)
 
-      // Determine level based on known words distribution
       const totalKnown = Object.values(levelCounts).reduce((sum, count) => sum + count, 0)
       
       if (totalKnown < 50) return 'A1'
       if (levelCounts['B1'] > 50 || levelCounts['B2'] > 30) return 'B1'
       if (levelCounts['A2'] > 100) return 'A2'
       
-      return 'A1' // Default
+      return 'A1'
     } catch (error) {
       console.error('Error getting user level:', error)
       return 'A1'
+    }
+  }
+
+  /**
+   * Select target words from saved texts
+   */
+  async selectWordsFromSavedTexts(savedTextIds: string[], count: number = 6): Promise<WordTarget[]> {
+    console.log('Selecting words from saved texts:', savedTextIds)
+    
+    try {
+      // Get words from saved texts
+      const extractedWords = await prisma.extractedWord.findMany({
+        where: {
+          savedTextId: { in: savedTextIds.map(id => parseInt(id)) },
+          savedText: { userId: this.userId }
+        },
+        include: {
+          savedText: true
+        },
+        take: count * 3 // Get more than needed for selection
+      })
+
+      console.log('Found extracted words:', extractedWords.length)
+
+      if (extractedWords.length === 0) {
+        return []
+      }
+
+      // Get practice history for these words
+      const practiceHistory = await prisma.practicedWord.findMany({
+        where: {
+          userId: this.userId,
+          baseForm: { in: extractedWords.map(w => w.baseForm) }
+        }
+      })
+
+      const practiceMap = new Map(
+        practiceHistory.map(p => [
+          `${p.baseForm}-${p.type}`, 
+          {
+            count: p.timesCorrect + p.timesWrong,
+            lastPracticed: p.lastPracticed,
+            accuracy: p.timesCorrect / (p.timesCorrect + p.timesWrong) || 0
+          }
+        ])
+      )
+
+      // Score words for practice priority
+      const scoredWords = extractedWords.map(word => {
+        const key = `${word.baseForm}-${word.type}`
+        const practice = practiceMap.get(key)
+        
+        let priority = 10 // Base priority
+        
+        if (!practice) {
+          priority += 20 // Never practiced
+        } else {
+          const daysSince = practice.lastPracticed 
+            ? (Date.now() - practice.lastPracticed.getTime()) / (1000 * 60 * 60 * 24)
+            : 999
+            
+          if (daysSince < 1) priority -= 15
+          else if (daysSince < 3) priority -= 10
+          else if (daysSince < 7) priority -= 5
+          
+          if (practice.count > 5 && practice.accuracy > 0.8) {
+            priority -= 10
+          }
+          
+          if (practice.count > 0 && practice.accuracy < 0.5) {
+            priority += 10
+          }
+        }
+
+        return {
+          word,
+          practice: practice || { count: 0, lastPracticed: null, accuracy: 0 },
+          priority
+        }
+      })
+
+      // Remove duplicates by baseForm-type combination
+      const uniqueWords = new Map()
+      scoredWords.forEach(item => {
+        const key = `${item.word.baseForm}-${item.word.type}`
+        if (!uniqueWords.has(key) || uniqueWords.get(key).priority < item.priority) {
+          uniqueWords.set(key, item)
+        }
+      })
+
+      // Sort by priority and take top words
+      const selectedWords = Array.from(uniqueWords.values())
+        .sort((a, b) => b.priority - a.priority)
+        .slice(0, count)
+        .map(({ word, practice }) => ({
+          baseForm: word.baseForm,
+          type: word.type as 'VERB' | 'NOUN' | 'ADJ' | 'ADVERB',
+          translation: word.translation || '',
+          practiceCount: practice.count,
+          lastPracticed: practice.lastPracticed || undefined,
+          isKnown: practice.count >= 3 && practice.accuracy > 0.7,
+          familiarity: this.getFamiliarityLevel(practice.count, practice.accuracy),
+          themes: [word.savedText.title],
+          source: 'saved-text' as const,
+          textId: word.savedTextId.toString()
+        }))
+
+      console.log(`Selected ${selectedWords.length} words from saved texts`)
+      return selectedWords
+
+    } catch (error) {
+      console.error('Error selecting words from saved texts:', error)
+      return []
     }
   }
 
@@ -77,14 +193,12 @@ export class PracticeEngine {
     console.log('Selecting words for theme:', theme)
   
     try {
-      // First, find the exact theme by name
       let themeCategory = await prisma.themeCategory.findFirst({
         where: {
           name: { equals: theme, mode: 'insensitive' }
         }
       })
 
-      // If not found, try partial matching
       if (!themeCategory) {
         themeCategory = await prisma.themeCategory.findFirst({
           where: {
@@ -93,7 +207,6 @@ export class PracticeEngine {
         })
       }
 
-      // If still not found, try searching within theme words themselves
       if (!themeCategory) {
         const themeWords = theme.toLowerCase().split(/[\s&,]+/).filter(word => word.length > 2)
         
@@ -106,7 +219,6 @@ export class PracticeEngine {
         })
       }
 
-      // Last resort: get the first available theme with enough words
       if (!themeCategory) {
         console.log('No exact theme match found, using most populated theme')
         themeCategory = await prisma.themeCategory.findFirst({
@@ -117,7 +229,7 @@ export class PracticeEngine {
           },
           where: {
             words: {
-              some: {} // Ensure theme has at least some words
+              some: {}
             }
           },
           orderBy: {
@@ -140,7 +252,7 @@ export class PracticeEngine {
         where: {
           themeCategoryId: themeCategory.id
         },
-        take: Math.min(50, count * 3) // Get more words than needed for better selection
+        take: Math.min(100, count * 5) // Get more words for better selection
       })
     
       console.log('Found theme words:', themeWords.length)
@@ -158,7 +270,6 @@ export class PracticeEngine {
         }
       })
 
-      // Convert to practice history map
       const practiceMap = new Map(
         practiceHistory.map(p => [
           `${p.baseForm}-${p.type}`, 
@@ -175,12 +286,11 @@ export class PracticeEngine {
         const key = `${word.text}-${word.type}`
         const practice = practiceMap.get(key)
         
-        let priority = 10 // Base priority
+        let priority = 10
         
         if (!practice) {
-          priority += 20 // Never practiced - highest priority
+          priority += 20
         } else {
-          // Lower priority for recently practiced words
           const daysSince = practice.lastPracticed 
             ? (Date.now() - practice.lastPracticed.getTime()) / (1000 * 60 * 60 * 24)
             : 999
@@ -189,12 +299,10 @@ export class PracticeEngine {
           else if (daysSince < 3) priority -= 10
           else if (daysSince < 7) priority -= 5
           
-          // Lower priority for well-practiced words
           if (practice.count > 5 && practice.accuracy > 0.8) {
             priority -= 10
           }
           
-          // Boost priority for words that were practiced but with low accuracy
           if (practice.count > 0 && practice.accuracy < 0.5) {
             priority += 10
           }
@@ -207,11 +315,9 @@ export class PracticeEngine {
         }
       })
 
-      // Sort by priority and take top words, ensuring we don't exceed available words
-      const availableWordsCount = Math.min(scoredWords.length, count)
       const selectedWords = scoredWords
         .sort((a, b) => b.priority - a.priority)
-        .slice(0, availableWordsCount)
+        .slice(0, count)
         .map(({ word, practice }) => ({
           baseForm: word.text,
           type: word.type as 'VERB' | 'NOUN' | 'ADJ' | 'ADVERB',
@@ -220,15 +326,9 @@ export class PracticeEngine {
           lastPracticed: practice.lastPracticed || undefined,
           isKnown: practice.count >= 3 && practice.accuracy > 0.7,
           familiarity: this.getFamiliarityLevel(practice.count, practice.accuracy),
-          themes: [theme]
+          themes: [theme],
+          source: 'theme' as const
         }))
-
-      // If we have fewer words than requested, try to get familiar words to fill the gap
-      if (selectedWords.length < count) {
-        const familiarWordsNeeded = count - selectedWords.length
-        const familiarWords = await this.getFamiliarWords(theme, familiarWordsNeeded)
-        selectedWords.push(...familiarWords)
-      }
 
       console.log(`Selected ${selectedWords.length} words for practice`)
       return selectedWords
@@ -249,7 +349,7 @@ export class PracticeEngine {
           userId: this.userId,
           timesCorrect: { gte: 2 },
           OR: [
-            { lastPracticed: { gte: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000) } }, // Last 30 days
+            { lastPracticed: { gte: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000) } },
             { lastPracticed: null }
           ]
         },
@@ -260,7 +360,7 @@ export class PracticeEngine {
       return familiarWords.map(word => ({
         baseForm: word.baseForm,
         type: word.type as 'VERB' | 'NOUN' | 'ADJ' | 'ADVERB',
-        translation: '', // We'll try to get this from the word tables
+        translation: '',
         practiceCount: word.timesCorrect + word.timesWrong,
         lastPracticed: word.lastPracticed || undefined,
         isKnown: true,
@@ -280,11 +380,10 @@ export class PracticeEngine {
     try {
       console.log('Using fallback words from any available theme')
       
-      // Get words from any theme category
       const fallbackWords = await prisma.themeCategoryWord.findMany({
-        take: count * 2, // Get more than needed for better selection
+        take: count * 2,
         orderBy: {
-          text: 'asc' // Simple ordering
+          text: 'asc'
         }
       })
 
@@ -293,7 +392,6 @@ export class PracticeEngine {
         return []
       }
 
-      // Convert to WordTarget format
       return fallbackWords.slice(0, count).map(word => ({
         baseForm: word.text,
         type: word.type as 'VERB' | 'NOUN' | 'ADJ' | 'ADVERB',
@@ -324,27 +422,42 @@ export class PracticeEngine {
    * Create a new practice session
    */
   async createPracticeSession(
-    theme: string, 
-    style: PracticeSession['style'],
-    wordCount: number = 6
+    params: {
+      theme?: string
+      savedTextIds?: string[]
+      source: 'theme' | 'saved-texts'
+      style: PracticeSession['style']
+      wordCount?: number
+    }
   ): Promise<Omit<PracticeSession, 'generatedContent'>> {
     try {
       const userLevel = await this.getUserLevel()
-      const targetWords = await this.selectTargetWords(theme, wordCount)
+      let targetWords: WordTarget[] = []
+      let sessionTheme = ''
+
+      if (params.source === 'saved-texts' && params.savedTextIds) {
+        targetWords = await this.selectWordsFromSavedTexts(params.savedTextIds, params.wordCount || 6)
+        sessionTheme = 'Mixed Content from Saved Texts'
+      } else if (params.source === 'theme' && params.theme) {
+        targetWords = await this.selectTargetWords(params.theme, params.wordCount || 6)
+        sessionTheme = params.theme
+      }
       
       if (targetWords.length === 0) {
-        throw new Error('No words available for practice. Please check your theme data.')
+        throw new Error('No words available for practice. Please check your data.')
       }
 
       const session: Omit<PracticeSession, 'generatedContent'> = {
         id: `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
         userId: this.userId,
-        theme,
-        style,
+        theme: sessionTheme,
+        style: params.style,
         targetWords,
         userLevel,
         difficulty: this.calculateDifficulty(targetWords),
-        createdAt: new Date()
+        createdAt: new Date(),
+        source: params.source,
+        savedTextIds: params.savedTextIds
       }
 
       console.log(`Created session with ${targetWords.length} target words`)
@@ -428,7 +541,7 @@ export class PracticeEngine {
       })
 
       return themes
-        .filter(theme => theme._count.words > 0) // Only include themes with words
+        .filter(theme => theme._count.words > 0)
         .map(theme => ({
           name: theme.name,
           wordCount: theme._count.words
@@ -440,7 +553,37 @@ export class PracticeEngine {
   }
 
   /**
-   * Generate quiz options for a word
+   * Get saved texts for practice
+   */
+  async getAvailableSavedTexts(): Promise<Array<{ id: string; title: string; wordCount: number }>> {
+    try {
+      const savedTexts = await prisma.savedText.findMany({
+        where: {
+          userId: this.userId
+        },
+        include: {
+          _count: {
+            select: { extractedWords: true }
+          }
+        },
+        orderBy: {
+          dateAdded: 'desc'
+        }
+      })
+
+      return savedTexts.map(text => ({
+        id: text.id.toString(),
+        title: text.title,
+        wordCount: text._count.extractedWords
+      }))
+    } catch (error) {
+      console.error('Error getting saved texts:', error)
+      return []
+    }
+  }
+
+  /**
+   * Generate quiz options for a word with improved accuracy
    */
   async generateQuizOptions(targetWord: WordTarget): Promise<{
     question: string
@@ -451,7 +594,8 @@ export class PracticeEngine {
       const distractors = await prisma.themeCategoryWord.findMany({
         where: {
           type: targetWord.type,
-          NOT: { text: targetWord.baseForm }
+          NOT: { text: targetWord.baseForm },
+          level: targetWord.source === 'theme' ? undefined : { in: ['A1', 'A2', 'B1'] } // Similar difficulty level
         },
         take: 3,
         orderBy: {
@@ -459,18 +603,51 @@ export class PracticeEngine {
         }
       })
 
-      // If we don't have enough distractors from the same type, get from any type
+      // If we don't have enough distractors from theme words, get from extracted words
       if (distractors.length < 3) {
-        const additionalDistractors = await prisma.themeCategoryWord.findMany({
+        const additionalDistractors = await prisma.extractedWord.findMany({
           where: {
-            NOT: { text: targetWord.baseForm }
+            type: targetWord.type,
+            NOT: { baseForm: targetWord.baseForm },
+            savedText: { userId: this.userId },
+            translation: { not: null }
           },
           take: 3 - distractors.length,
           orderBy: {
-            text: 'asc'
+            baseForm: 'asc'
           }
         })
-        distractors.push(...additionalDistractors)
+
+        // Convert extracted words to the format we need
+        distractors.push(...additionalDistractors.map(word => ({
+          text: word.baseForm,
+          translation: word.translation || `Translation of ${word.baseForm}`,
+          type: word.type,
+          level: word.level || 'A2'
+        } as any)))
+      }
+
+      // Final fallback with generic options if still not enough
+      const fallbackOptions = [
+        { text: 'House', translation: 'House' },
+        { text: 'Car', translation: 'Car' },
+        { text: 'Book', translation: 'Book' },
+        { text: 'Water', translation: 'Water' },
+        { text: 'Food', translation: 'Food' }
+      ]
+
+      while (distractors.length < 3) {
+        const fallback = fallbackOptions[distractors.length]
+        if (fallback) {
+          distractors.push({
+            text: fallback.text,
+            translation: fallback.translation,
+            type: targetWord.type,
+            level: 'A1'
+          } as any)
+        } else {
+          break
+        }
       }
 
       const options = [
@@ -479,7 +656,7 @@ export class PracticeEngine {
           text: targetWord.translation,
           isCorrect: true
         },
-        ...distractors.map((word, index) => ({
+        ...distractors.slice(0, 3).map((word, index) => ({
           id: `distractor_${index}`,
           text: word.translation,
           isCorrect: false
@@ -501,9 +678,9 @@ export class PracticeEngine {
         question: `What does "${targetWord.baseForm}" mean?`,
         options: [
           { id: 'correct', text: targetWord.translation, isCorrect: true },
-          { id: 'wrong1', text: 'Option 1', isCorrect: false },
-          { id: 'wrong2', text: 'Option 2', isCorrect: false },
-          { id: 'wrong3', text: 'Option 3', isCorrect: false }
+          { id: 'wrong1', text: 'House', isCorrect: false },
+          { id: 'wrong2', text: 'Car', isCorrect: false },
+          { id: 'wrong3', text: 'Book', isCorrect: false }
         ].sort(() => Math.random() - 0.5)
       }
     }

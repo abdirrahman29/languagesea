@@ -1,17 +1,14 @@
-// Optimized text-processor.ts - Fixed conjugation saving and efficient batch processing
+// Fixed text-processor.ts - Added proper validation and error handling
 import type { ProcessingResult } from "./types"
 import { createTranslator } from "@/lib/translator"
 import { prisma } from "@/lib/db"
 
 // Simple tokenizer function to split text into words and sentences
 function tokenizeText(text: string) {
-  // Split text into sentences
   const sentences = text.match(/[^.!?]+[.!?]+/g) || [text]
 
-  // Process each sentence
   return sentences.map((sentence) => {
     const trimmedSentence = sentence.trim()
-    // Split sentence into words, removing punctuation
     const words = trimmedSentence
       .split(/\s+/)
       .map((word) => word.replace(/[.,!?;:()]/g, "").toLowerCase())
@@ -24,9 +21,9 @@ function tokenizeText(text: string) {
   })
 }
 
-// Map Gemini word types to our standardized types
-function normalizeWordType(geminiWordType: string): 'VERB' | 'NOUN' | 'ADJ' | 'ADVERB' {
-  const type = geminiWordType.toUpperCase()
+// Map AI word types to our standardized types
+function normalizeWordType(aiWordType: string): 'VERB' | 'NOUN' | 'ADJ' | 'ADVERB' {
+  const type = aiWordType.toUpperCase()
   
   switch (type) {
     case 'VERB':
@@ -37,7 +34,6 @@ function normalizeWordType(geminiWordType: string): 'VERB' | 'NOUN' | 'ADJ' | 'A
       return 'ADJ'
     case 'ADVERB':
       return 'ADVERB'
-    // Map other types to closest equivalent or default to ADVERB
     case 'PREPOSITION':
     case 'CONJUNCTION':  
     case 'PRONOUN':
@@ -45,44 +41,130 @@ function normalizeWordType(geminiWordType: string): 'VERB' | 'NOUN' | 'ADJ' | 'A
     case 'DETERMINER':
     case 'INTERJECTION':
     default:
-      return 'ADVERB' // Default fallback for unhandled types
+      return 'ADVERB'
   }
 }
 
-async function checkWordInDatabase(userId: string, baseForm: string, type: 'VERB' | 'NOUN' | 'ADJ' | 'ADVERB') {
-  // Check both PracticedWord and ExtractedWord tables
-  const [practiced, extracted] = await Promise.all([
-    prisma.practicedWord.findFirst({
-      where: {
-        userId,
-        baseForm,
-        type
-      }
-    }),
-    prisma.extractedWord.findFirst({
-      where: {
-        savedText: {
-          userId
-        },
-        baseForm,
-        type
-      }
-    })
-  ])
+async function checkWordInDatabase(userId: string, baseForm: string, type: 'VERB' | 'NOUN' | 'ADJ' | 'ADVERB', languageCode: string) {
+  // Add validation
+  if (!userId || !baseForm || !type || !languageCode) {
+    console.warn('Invalid parameters for checkWordInDatabase:', { userId, baseForm, type, languageCode })
+    return false
+  }
 
-  return practiced || extracted ? true : false
+  try {
+    const [practiced, extracted] = await Promise.all([
+      prisma.practicedWord.findFirst({
+        where: {
+          userId,
+          baseForm,
+          type,
+          languageCode
+        }
+      }),
+      prisma.extractedWord.findFirst({
+        where: {
+          savedText: {
+            userId
+          },
+          baseForm,
+          type,
+          languageCode
+        }
+      })
+    ])
+
+    return practiced || extracted ? true : false
+  } catch (error) {
+    console.error('Error checking word in database:', error)
+    return false
+  }
 }
 
-// FIXED: Function to save verb conjugations with proper error handling
-async function saveVerbConjugations(verbId: number, baseForm: string) {
+// Get user's language settings with proper validation
+async function getUserLanguageSettings(userId: string) {
+  // Validate userId parameter
+  if (!userId || typeof userId !== 'string') {
+    console.error('Invalid userId provided to getUserLanguageSettings:', userId)
+    throw new Error('Valid userId is required')
+  }
+
   try {
-    console.log(`Getting conjugations for verb: ${baseForm} (ID: ${verbId})`)
+    console.log('Getting language settings for userId:', userId)
     
-    const translator = createTranslator()
+    const languageSettings = await prisma.languageSettings.findUnique({
+      where: { userId }
+    })
+
+    if (languageSettings) {
+      console.log('Found language settings:', languageSettings)
+      return {
+        languageCode: languageSettings.languageCode,
+        translationCode: languageSettings.translationCode,
+        learningLanguage: languageSettings.learningLanguage,
+        nativeLanguage: languageSettings.nativeLanguage,
+        includeConjugations: languageSettings.includeConjugations,
+        includeCases: languageSettings.includeCases,
+        includeGender: languageSettings.includeGender
+      }
+    }
+
+    console.log('No language settings found, checking user table')
+    
+    // Fallback to user's basic language settings
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      select: {
+        languageCode: true,
+        translationCode: true,
+        learningLanguage: true,
+        nativeLanguage: true
+      }
+    })
+
+    if (!user) {
+      console.error('User not found with id:', userId)
+      throw new Error(`User not found with id: ${userId}`)
+    }
+
+    console.log('Found user settings:', user)
+    
+    return {
+      languageCode: user.languageCode || 'de',
+      translationCode: user.translationCode || 'en',
+      learningLanguage: user.learningLanguage || 'German',
+      nativeLanguage: user.nativeLanguage || 'English',
+      includeConjugations: true,
+      includeCases: true,
+      includeGender: true
+    }
+  } catch (error) {
+    console.error('Error getting user language settings:', error)
+    
+    // Return safe defaults only as last resort
+    console.log('Using default language settings due to error')
+    return {
+      languageCode: 'de',
+      translationCode: 'en',
+      learningLanguage: 'German',
+      nativeLanguage: 'English',
+      includeConjugations: true,
+      includeCases: true,
+      includeGender: true
+    }
+  }
+}
+
+// Enhanced function to save verb conjugations with language awareness
+async function saveVerbConjugations(verbId: number, baseForm: string, languageCode: string) {
+  try {
+    console.log(`Getting conjugations for ${languageCode.toUpperCase()} verb: ${baseForm} (ID: ${verbId})`)
+    
+    const translator = createTranslator(languageCode)
     const conjugationData = await translator.getVerbConjugations(baseForm)
     
     if (!conjugationData?.conjugations) {
-      console.log(`No conjugations found for ${baseForm}`)
+      console.log(`No conjugations found for ${baseForm} in ${languageCode}`)
       return false
     }
 
@@ -109,108 +191,69 @@ async function saveVerbConjugations(verbId: number, baseForm: string) {
       }
     }
 
-    // Process present tense
-    if (conjugations.present?.indicative) {
-      for (const [number, persons] of Object.entries(conjugations.present.indicative)) {
-        for (const [person, data] of Object.entries(persons as any)) {
-          if (data && (data as any).form) {
-            addConjugationRecord("present", "indicative", number, person, (data as any).form)
+    // Process all tense/mood combinations
+    for (const [tense, tenseData] of Object.entries(conjugations)) {
+      if (typeof tenseData === 'object' && tenseData !== null) {
+        for (const [mood, moodData] of Object.entries(tenseData)) {
+          if (typeof moodData === 'object' && moodData !== null) {
+            for (const [number, numberData] of Object.entries(moodData)) {
+              if (typeof numberData === 'object' && numberData !== null) {
+                for (const [person, personData] of Object.entries(numberData)) {
+                  if (personData && typeof personData === 'object' && (personData as any).form) {
+                    addConjugationRecord(tense, mood, number, person, (personData as any).form)
+                  }
+                }
+              }
+            }
           }
         }
       }
-    }
-
-    if (conjugations.present?.subjunctive) {
-      for (const [number, persons] of Object.entries(conjugations.present.subjunctive)) {
-        for (const [person, data] of Object.entries(persons as any)) {
-          if (data && (data as any).form) {
-            addConjugationRecord("present", "subjunctive", number, person, (data as any).form)
-          }
-        }
-      }
-    }
-
-    // Process past tense
-    if (conjugations.past?.indicative) {
-      for (const [number, persons] of Object.entries(conjugations.past.indicative)) {
-        for (const [person, data] of Object.entries(persons as any)) {
-          if (data && (data as any).form) {
-            addConjugationRecord("past", "indicative", number, person, (data as any).form)
-          }
-        }
-      }
-    }
-
-    if (conjugations.past?.subjunctive) {
-      for (const [number, persons] of Object.entries(conjugations.past.subjunctive)) {
-        for (const [person, data] of Object.entries(persons as any)) {
-          if (data && (data as any).form) {
-            addConjugationRecord("past", "subjunctive", number, person, (data as any).form)
-          }
-        }
-      }
-    }
-
-    // Process imperative
-    if (conjugations.imperative?.SG && Array.isArray(conjugations.imperative.SG)) {
-      conjugations.imperative.SG.forEach((form: any) => {
-        if (form?.form) {
-          addConjugationRecord("imperative", "imperative", "SG", form.person || "2", form.form)
-        }
-      })
-    }
-
-    if (conjugations.imperative?.PL && Array.isArray(conjugations.imperative.PL)) {
-      conjugations.imperative.PL.forEach((form: any, index: number) => {
-        if (form?.form) {
-          addConjugationRecord("imperative", "imperative", "PL", form.person || (index === 0 ? "2" : "3"), form.form)
-        }
-      })
     }
 
     // Save all conjugations in a single transaction
     if (conjugationRecords.length > 0) {
       await prisma.verbConjugation.createMany({
         data: conjugationRecords,
-        skipDuplicates: true // Prevent errors from duplicate entries
+        skipDuplicates: true
       })
-      console.log(`✅ Successfully saved ${conjugationRecords.length} conjugation forms for verb ${baseForm} (ID: ${verbId})`)
+      console.log(`✅ Successfully saved ${conjugationRecords.length} conjugation forms for ${languageCode} verb ${baseForm}`)
       return true
     } else {
-      console.log(`⚠️ No valid conjugation forms found for verb ${baseForm} (ID: ${verbId})`)
+      console.log(`⚠️ No valid conjugation forms found for ${languageCode} verb ${baseForm}`)
       return false
     }
 
   } catch (error) {
-    console.error(`❌ Error saving conjugations for verb ${baseForm} (ID: ${verbId}):`, error)
+    console.error(`❌ Error saving conjugations for ${languageCode} verb ${baseForm}:`, error)
     return false
   }
 }
 
-async function createOrFindThemes(extractedThemes: any[]): Promise<string[]> {
+async function createOrFindThemes(extractedThemes: any[], languageCode: string): Promise<string[]> {
   const themeIds: string[] = []
   
   for (const theme of extractedThemes) {
     try {
-      // Try to find existing theme with similar name
       let existingTheme = await prisma.themeCategory.findFirst({
         where: {
           name: {
             contains: theme.name,
             mode: 'insensitive'
-          }
+          },
+          languageCode
         }
       })
       
-      // If not found, create new theme
       if (!existingTheme) {
         existingTheme = await prisma.themeCategory.create({
           data: {
             name: theme.name,
-            description: theme.description
+            description: theme.description,
+            language: theme.language || 'German',
+            languageCode
           }
         })
-        console.log(`Created new theme: ${theme.name}`)
+        console.log(`Created new ${languageCode} theme: ${theme.name}`)
       }
       
       themeIds.push(existingTheme.id)
@@ -222,31 +265,31 @@ async function createOrFindThemes(extractedThemes: any[]): Promise<string[]> {
   return themeIds
 }
 
-// Function to add words to themes automatically
-async function addWordToThemes(word: any, themes: string[], createdThemeIds: string[]) {
+// Function to add words to themes with language awareness
+async function addWordToThemes(word: any, themes: string[], createdThemeIds: string[], languageCode: string) {
   if (!themes || themes.length === 0 || themes.includes("General")) {
-    return // Skip general or undefined themes
+    return
   }
   
   try {
     for (const themeName of themes) {
-      // Find the theme by name
       const theme = await prisma.themeCategory.findFirst({
         where: {
           name: {
             contains: themeName,
             mode: 'insensitive'
-          }
+          },
+          languageCode
         }
       })
       
       if (theme) {
-        // Check if word already exists in this theme
         const existingWord = await prisma.themeCategoryWord.findFirst({
           where: {
             themeCategoryId: theme.id,
             text: word.baseForm,
-            type: word.type
+            type: word.type,
+            languageCode
           }
         })
         
@@ -258,273 +301,304 @@ async function addWordToThemes(word: any, themes: string[], createdThemeIds: str
               type: word.type,
               level: word.level || "A2",
               translation: word.translation,
-              gender: word.gender || null
+              gender: word.gender || null,
+              language: word.language || 'German',
+              languageCode
             }
           })
-          console.log(`Added word "${word.baseForm}" to theme "${themeName}"`)
+          console.log(`Added ${languageCode} word "${word.baseForm}" to theme "${themeName}"`)
         }
       }
     }
   } catch (error) {
-    console.error(`Error adding word ${word.baseForm} to themes:`, error)
+    console.error(`Error adding ${languageCode} word ${word.baseForm} to themes:`, error)
   }
 }
 
-const currentTextWordMap = new Map<string, number>();
+const currentTextWordMap = new Map<string, number>()
 
-// OPTIMIZED: Enhanced function to process German text with efficient batching and fixed conjugations
-export async function processGermanText(text: string, title: string, userId: string): Promise<ProcessingResult> {
-  currentTextWordMap.clear();
-
-  // Tokenize the text
-  const tokenizedSentences = tokenizeText(text)
-
-  // Initialize result structure
-  const result: ProcessingResult = {
-    stats: {
-      totalWords: 0,
-      verbs: 0,
-      nouns: 0,
-      adjectives: 0,
-      adverbs: 0,
-      newWords: 0,
-      newVerbs: 0,
-      newNouns: 0,
-      newAdjectives: 0,
-      existingWords: 0,
-      levelA1: 0,
-      levelA2: 0,
-      levelB1: 0,
-      levelB2Plus: 0,
-    },
-    extractedWords: {
-      verbs: [],
-      nouns: [],
-      adjectives: [],
-      adverbs: [],
-    },
-    sentences: [],
-    themes: []
+// Enhanced function to process text with dynamic language support and validation
+export async function processText(text: string, title: string, userId: string): Promise<ProcessingResult> {
+  // Validate input parameters
+  if (!text || typeof text !== 'string') {
+    throw new Error('Valid text is required')
+  }
+  
+  if (!title || typeof title !== 'string') {
+    throw new Error('Valid title is required')
+  }
+  
+  if (!userId || typeof userId !== 'string') {
+    throw new Error('Valid userId is required')
   }
 
-  const processedWords: Record<string, Record<string, number>> = {
-    VERB: {},
-    NOUN: {},
-    ADJ: {},
-    ADVERB: {},
-  }
-
-  result.stats.totalWords = tokenizedSentences.reduce((count, sentence) => count + sentence.words.length, 0)
-
-  const translator = createTranslator()
-
-  // Extract themes from the text
-  console.log("Extracting themes from text...")
-  const themeExtraction = await translator.extractThemes(text, title)
-  result.themes = themeExtraction.themes
-  console.log("Waiting 4 seconds to respect rate limits...")
-  await new Promise(resolve => setTimeout(resolve, 4000)) // 4 second delay
+  console.log('processText called with:', { textLength: text.length, title, userId })
   
-  // Create or find existing themes in database
-  const createdThemeIds = await createOrFindThemes(themeExtraction.themes)
-  
-  console.log("Identified themes:", result.themes.map(t => t.name).join(', '))
+  currentTextWordMap.clear()
 
-  // OPTIMIZED: Use the new efficient batch processing
-  console.log(`Processing ${tokenizedSentences.length} sentences with optimized batching...`)
-  
-  const sentenceData = tokenizedSentences.map(sentence => ({
-    text: sentence.text,
-    words: sentence.words.filter(word => word && word.length > 0)
-  }))
-  console.log("Waiting 4 seconds before batch analysis...")
-  await new Promise(resolve => setTimeout(resolve, 4000)) // 4 second delay
+  try {
+    // Get user's language settings with validation
+    const languageSettings = await getUserLanguageSettings(userId)
+    const { languageCode, translationCode, learningLanguage, includeConjugations } = languageSettings
 
-  // Use the optimized batch analyzer with larger chunks
-  const maxWordsPerBatch = 150 // Adjust based on your API limits
-  const batchAnalysis = await translator.batchAnalyzeEntireText(
-    sentenceData, 
-    result.themes, 
-    true, // Include conjugations for efficiency
-    maxWordsPerBatch
-  )
-  await new Promise(resolve => setTimeout(resolve, 2000)) // 2 second delay
+    console.log(`Processing ${learningLanguage} text with language code: ${languageCode}`)
 
-  console.log(`Batch analysis complete, processing ${batchAnalysis.sentences.length} sentences...`)
+    // Tokenize the text
+    const tokenizedSentences = tokenizeText(text)
 
-  // Process each sentence from the batch analysis
-  for (let i = 0; i < tokenizedSentences.length; i++) {
-    const sentence = tokenizedSentences[i]
-    const sentenceAnalysis = batchAnalysis.sentences[i]
-
-    if (!sentenceAnalysis) {
-      console.warn(`No analysis found for sentence ${i}: "${sentence.text}"`)
-      continue
+    // Initialize result structure
+    const result: ProcessingResult = {
+      stats: {
+        totalWords: 0,
+        verbs: 0,
+        nouns: 0,
+        adjectives: 0,
+        adverbs: 0,
+        newWords: 0,
+        newVerbs: 0,
+        newNouns: 0,
+        newAdjectives: 0,
+        newAdverbs: 0,
+        existingWords: 0,
+        levelA1: 0,
+        levelA2: 0,
+        levelB1: 0,
+        levelB2Plus: 0,
+      },
+      extractedWords: {
+        verbs: [],
+        nouns: [],
+        adjectives: [],
+        adverbs: [],
+      },
+      sentences: [],
+      themes: []
     }
 
-    const processedSentence = {
-      german: sentence.text,
-      english: sentenceAnalysis.sentenceTranslation,
-      words: [] as Array<{ baseForm: string; type: string }>,
+    const processedWords: Record<string, Record<string, number>> = {
+      VERB: {},
+      NOUN: {},
+      ADJ: {},
+      ADVERB: {},
     }
 
-    // Process each word in the sentence
-    for (const word of sentence.words) {
-      if (!word) continue
+    result.stats.totalWords = tokenizedSentences.reduce((count, sentence) => count + sentence.words.length, 0)
 
-      const analysis = sentenceAnalysis.words[word]
-      if (!analysis) {
-        console.log(`No analysis found for word: "${word}"`)
+    // Create translator with user's language settings
+    const translator = createTranslator(languageCode, translationCode)
+
+    // Extract themes from the text
+    console.log(`Extracting themes from ${learningLanguage} text...`)
+    const themeExtraction = await translator.extractThemes(text, title)
+    result.themes = themeExtraction.themes
+    console.log("Waiting 4 seconds to respect rate limits...")
+    await new Promise(resolve => setTimeout(resolve, 4000))
+    
+    // Create or find existing themes in database
+    const createdThemeIds = await createOrFindThemes(themeExtraction.themes, languageCode)
+    
+    console.log(`Identified ${learningLanguage} themes:`, result.themes.map(t => t.name).join(', '))
+
+    // Use the language-aware batch analyzer
+    console.log(`Processing ${tokenizedSentences.length} ${learningLanguage} sentences with optimized batching...`)
+    
+    const sentenceData = tokenizedSentences.map(sentence => ({
+      text: sentence.text,
+      words: sentence.words.filter(word => word && word.length > 0)
+    }))
+    console.log("Waiting 4 seconds before batch analysis...")
+    await new Promise(resolve => setTimeout(resolve, 4000))
+
+    const maxWordsPerBatch = 150
+    const batchAnalysis = await translator.batchAnalyzeEntireText(
+      sentenceData, 
+      result.themes, 
+      includeConjugations,
+      maxWordsPerBatch
+    )
+    await new Promise(resolve => setTimeout(resolve, 2000))
+
+    console.log(`${learningLanguage} batch analysis complete, processing ${batchAnalysis.sentences.length} sentences...`)
+
+    // Process each sentence from the batch analysis
+    for (let i = 0; i < tokenizedSentences.length; i++) {
+      const sentence = tokenizedSentences[i]
+      const sentenceAnalysis = batchAnalysis.sentences[i]
+
+      if (!sentenceAnalysis) {
+        console.warn(`No analysis found for ${learningLanguage} sentence ${i}: "${sentence.text}"`)
         continue
       }
 
-      const baseForm = analysis.baseForm
-      const rawWordType = analysis.wordType
-      const wordType = normalizeWordType(rawWordType)
-      const level = analysis.level
-      const translation = analysis.translation
-      const themes = analysis.themes || ["General"]
+      const processedSentence = {
+        german: sentence.text, // Keep this field name for compatibility
+        english: sentenceAnalysis.sentenceTranslation,
+        words: [] as Array<{ baseForm: string; type: string }>,
+      }
 
-      // Check if this word has already been processed in this text
-      const currentCount = currentTextWordMap.get(baseForm) || 0;
-      const isRepeatInCurrentText = currentCount > 0;
-      currentTextWordMap.set(baseForm, currentCount + 1);
+      // Process each word in the sentence
+      for (const word of sentence.words) {
+        if (!word) continue
 
-      // Check if word is known in database
-      const isKnown = await checkWordInDatabase(userId, baseForm, wordType)
-      const isNew = !isKnown
+        const analysis = sentenceAnalysis.words[word]
+        if (!analysis) {
+          console.log(`No analysis found for ${learningLanguage} word: "${word}"`)
+          continue
+        }
 
-      // Update the counter for this word
-      processedWords[wordType][baseForm] = (processedWords[wordType][baseForm] || 0) + 1
+        const baseForm = analysis.baseForm
+        const rawWordType = analysis.wordType
+        const wordType = normalizeWordType(rawWordType)
+        const level = analysis.level
+        const translation = analysis.translation
+        const themes = analysis.themes || ["General"]
 
-      // Add word to themes if it's new and not a repeat
-      if (isNew && !isRepeatInCurrentText) {
-        await addWordToThemes({
+        // Check if this word has already been processed in this text
+        const currentCount = currentTextWordMap.get(baseForm) || 0
+        const isRepeatInCurrentText = currentCount > 0
+        currentTextWordMap.set(baseForm, currentCount + 1)
+
+        // Check if word is known in database (language-aware)
+        const isKnown = await checkWordInDatabase(userId, baseForm, wordType, languageCode)
+        const isNew = !isKnown
+
+        // Update the counter for this word
+        processedWords[wordType][baseForm] = (processedWords[wordType][baseForm] || 0) + 1
+
+        // Add word to themes if it's new and not a repeat
+        if (isNew && !isRepeatInCurrentText) {
+          await addWordToThemes({
+            baseForm,
+            type: wordType,
+            level,
+            translation,
+            gender: analysis.grammaticalInfo?.gender,
+            language: learningLanguage
+          }, themes, createdThemeIds, languageCode)
+        }
+
+        // Update stats based on word type
+        switch (wordType) {
+          case 'VERB':
+            result.stats.verbs++
+            if (isNew && !isRepeatInCurrentText) {
+              result.stats.newWords++
+              result.stats.newVerbs++
+            } else if (!isNew) {
+              result.stats.existingWords++
+            }
+
+            result.extractedWords.verbs.push({
+              baseForm,
+              originalForm: word,
+              level,
+              tense: analysis.grammaticalInfo?.tense || "unknown",
+              translation,
+              themes,
+              isNew,
+              isKnown,
+              isRepeat: isRepeatInCurrentText,
+              sentence: sentence.text,
+              sentenceTranslation: processedSentence.english,
+              conjugationHint: analysis.conjugationHint || undefined
+            })
+            break
+
+          case 'NOUN':
+            result.stats.nouns++
+            if (isNew && !isRepeatInCurrentText) {
+              result.stats.newWords++
+              result.stats.newNouns++
+            } else if (!isNew) {
+              result.stats.existingWords++
+            }
+
+            result.extractedWords.nouns.push({
+              baseForm,
+              originalForm: word,
+              level,
+              gender: analysis.grammaticalInfo?.gender || "unknown",
+              case: analysis.grammaticalInfo?.case || "unknown",
+              translation,
+              themes,
+              isNew,
+              isKnown,
+              isRepeat: isRepeatInCurrentText,
+              sentence: sentence.text,
+              sentenceTranslation: processedSentence.english,
+            })
+            break
+
+          case 'ADJ':
+            result.stats.adjectives++
+            if (isNew && !isRepeatInCurrentText) {
+              result.stats.newWords++
+              result.stats.newAdjectives++
+            } else if (!isNew) {
+              result.stats.existingWords++
+            }
+
+            result.extractedWords.adjectives.push({
+              baseForm,
+              originalForm: word,
+              level,
+              case: analysis.grammaticalInfo?.case || "unknown",
+              translation,
+              themes,
+              isNew,
+              isKnown,
+              isRepeat: isRepeatInCurrentText,
+              sentence: sentence.text,
+              sentenceTranslation: processedSentence.english,
+            })
+            break
+
+          case 'ADVERB':
+          default:
+            result.stats.adverbs++
+            if (isNew && !isRepeatInCurrentText) {
+              result.stats.newWords++
+              result.stats.newAdverbs++
+            } else if (!isNew) {
+              result.stats.existingWords++
+            }
+
+            result.extractedWords.adverbs.push({
+              baseForm,
+              originalForm: word,
+              level,
+              type: analysis.grammaticalInfo?.adverbType || rawWordType.toLowerCase() || "other",
+              translation,
+              themes,
+              isNew,
+              isKnown,
+              isRepeat: isRepeatInCurrentText,
+              sentence: sentence.text,
+              sentenceTranslation: processedSentence.english,
+            })
+            break
+        }
+
+        processedSentence.words.push({
           baseForm,
           type: wordType,
-          level,
-          translation,
-          gender: analysis.grammaticalInfo?.gender
-        }, themes, createdThemeIds)
+        })
+
+        updateLevelStats(result.stats, level)
       }
 
-      // Update stats based on word type
-      switch (wordType) {
-        case 'VERB':
-          result.stats.verbs++
-          if (isNew && !isRepeatInCurrentText) {
-            result.stats.newWords++
-            result.stats.newVerbs++
-          } else if (!isNew) {
-            result.stats.existingWords++
-          }
-
-          result.extractedWords.verbs.push({
-            baseForm,
-            originalForm: word,
-            level,
-            tense: analysis.grammaticalInfo?.tense || "unknown",
-            translation,
-            themes,
-            isNew,
-            isKnown,
-            isRepeat: isRepeatInCurrentText,
-            sentence: sentence.text,
-            sentenceTranslation: processedSentence.english,
-            // ADDED: Include conjugation hint if available
-            conjugationHint: analysis.conjugationHint || undefined
-          })
-          break;
-
-        case 'NOUN':
-          result.stats.nouns++
-          if (isNew && !isRepeatInCurrentText) {
-            result.stats.newWords++
-            result.stats.newNouns++
-          } else if (!isNew) {
-            result.stats.existingWords++
-          }
-
-          result.extractedWords.nouns.push({
-            baseForm,
-            originalForm: word,
-            level,
-            gender: analysis.grammaticalInfo?.gender || "unknown",
-            case: analysis.grammaticalInfo?.case || "unknown",
-            translation,
-            themes,
-            isNew,
-            isKnown,
-            isRepeat: isRepeatInCurrentText,
-            sentence: sentence.text,
-            sentenceTranslation: processedSentence.english,
-          })
-          break;
-
-        case 'ADJ':
-          result.stats.adjectives++
-          if (isNew && !isRepeatInCurrentText) {
-            result.stats.newWords++
-            result.stats.newAdjectives++
-          } else if (!isNew) {
-            result.stats.existingWords++
-          }
-
-          result.extractedWords.adjectives.push({
-            baseForm,
-            originalForm: word,
-            level,
-            case: analysis.grammaticalInfo?.case || "unknown",
-            translation,
-            themes,
-            isNew,
-            isKnown,
-            isRepeat: isRepeatInCurrentText,
-            sentence: sentence.text,
-            sentenceTranslation: processedSentence.english,
-          })
-          break;
-
-        case 'ADVERB':
-        default:
-          result.stats.adverbs++
-          if (isNew && !isRepeatInCurrentText) {
-            result.stats.newWords++
-          } else if (!isNew) {
-            result.stats.existingWords++
-          }
-
-          result.extractedWords.adverbs.push({
-            baseForm,
-            originalForm: word,
-            level,
-            type: analysis.grammaticalInfo?.adverbType || rawWordType.toLowerCase() || "other",
-            translation,
-            themes,
-            isNew,
-            isKnown,
-            isRepeat: isRepeatInCurrentText,
-            sentence: sentence.text,
-            sentenceTranslation: processedSentence.english,
-          })
-          break;
-      }
-
-      processedSentence.words.push({
-        baseForm,
-        type: wordType,
-      })
-
-      updateLevelStats(result.stats, level)
+      result.sentences.push(processedSentence)
     }
 
-    result.sentences.push(processedSentence)
-  }
+    console.log(`${learningLanguage} processing complete. Total stats:`, result.stats)
+    console.log(`${learningLanguage} themes identified:`, result.themes?.map(t => t.name).join(', '))
+    
+    return result
 
-  console.log(`Processing complete. Total stats:`, result.stats)
-  console.log(`Themes identified:`, result.themes?.map(t => t.name).join(', '))
-  
-  return result
+  } catch (error) {
+    console.error('Error in processText:', error)
+    throw new Error(`Failed to process text: ${error instanceof Error ? error.message : 'Unknown error'}`)
+  }
 }
 
 // Helper function to update level statistics
@@ -545,37 +619,9 @@ function updateLevelStats(stats: any, level: string) {
   }
 }
 
-// Function to process text with progress updates
-export async function processText(
-  text: string,
-  title: string,
-  onProgress: (progress: number, stats: any) => void,
-  userId: string
-): Promise<ProcessingResult> {
-  // Simulate processing steps with progress updates
-  onProgress(10, { verbs: 0, nouns: 0, adjectives: 0 })
-  await new Promise((resolve) => setTimeout(resolve, 500))
-
-  onProgress(30, { verbs: 0, nouns: 0, adjectives: 0 })
-  await new Promise((resolve) => setTimeout(resolve, 500))
-
-  onProgress(50, { verbs: 0, nouns: 0, adjectives: 0 })
-  await new Promise((resolve) => setTimeout(resolve, 500))
-
-  // Process the text
-  const result = await processGermanText(text, title, userId)
-
-  // Update progress with actual stats
-  onProgress(80, {
-    verbs: result.stats.verbs,
-    nouns: result.stats.nouns,
-    adjectives: result.stats.adjectives,
-  })
-
-  await new Promise((resolve) => setTimeout(resolve, 500))
-  onProgress(100, result.stats)
-
-  return result
+// Function to process text with progress updates (wrapper for compatibility)
+export async function processGermanText(text: string, title: string, userId: string): Promise<ProcessingResult> {
+  return processText(text, title, userId)
 }
 
 // Function to save processed text via API
@@ -605,5 +651,5 @@ export async function saveProcessedTextAction(userId: string, textData: any) {
   }
 }
 
-// ADDED: Export the saveVerbConjugations function for use in text-actions
+// Export the enhanced saveVerbConjugations function
 export { saveVerbConjugations }

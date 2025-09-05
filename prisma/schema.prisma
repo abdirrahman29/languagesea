@@ -1,6 +1,4 @@
-// This is your Prisma schema file,
-// learn more about it in the docs: https://pris.ly/d/prisma-schema
-
+// Updated schema.prisma with language settings
 generator client {
   provider = "prisma-client-js"
 }
@@ -10,7 +8,7 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-// User model for authentication
+// User model for authentication with language preferences
 model User {
   id             String          @id @default(cuid())
   name           String?
@@ -21,12 +19,49 @@ model User {
   createdAt      DateTime        @default(now())
   updatedAt      DateTime        @updatedAt
   level          String          @default("A1") // Current CEFR level
+  
+  // Language learning preferences
+  learningLanguage String        @default("German") // Language they're learning
+  nativeLanguage   String        @default("English") // Language they understand
+  languageCode     String        @default("de")      // ISO code for learning language
+  translationCode  String        @default("en")      // ISO code for native language
+  
   savedTexts     SavedText[]
   practicedWords PracticedWord[]
   userProgress   UserProgress?
+  languageSettings LanguageSettings?
 }
 
-// User progress tracking
+// New model for detailed language settings
+model LanguageSettings {
+  id                    String   @id @default(cuid())
+  userId                String   @unique
+  user                  User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  // Learning preferences
+  learningLanguage      String   @default("German")
+  nativeLanguage        String   @default("English")
+  languageCode          String   @default("de")
+  translationCode       String   @default("en")
+  
+  // Practice preferences
+  showTranslations      Boolean  @default(true)
+  autoPlayAudio         Boolean  @default(false)
+  preferredVoice        String?  // For text-to-speech
+  practiceReminders     Boolean  @default(true)
+  dailyGoal            Int      @default(20) // Words per day
+  
+  // Difficulty preferences
+  preferredDifficulty   String   @default("auto") // auto, easy, medium, hard
+  includeConjugations   Boolean  @default(true)
+  includeCases          Boolean  @default(true)
+  includeGender         Boolean  @default(true)
+  
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+}
+
+// User progress tracking with language-specific stats
 model UserProgress {
   id                String   @id @default(cuid())
   userId            String   @unique
@@ -34,14 +69,21 @@ model UserProgress {
   verbsLearned      Int      @default(0)
   nounsLearned      Int      @default(0)
   adjectivesLearned Int      @default(0)
-  adverbsLearned    Int      @default(0)  // Added adverbs tracking
+  adverbsLearned    Int      @default(0)
   textsProcessed    Int      @default(0)
   lastActive        DateTime @default(now())
+  
+  // Language-specific progress
+  currentLanguage   String   @default("German")
+  wordsPerDay       Int      @default(0)
+  streak            Int      @default(0)
+  totalPracticeTime Int      @default(0) // in minutes
+  
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
 }
 
-// Verb model
+// Rest of the schema remains the same...
 model Verb {
   id                      Int             @id @default(autoincrement())
   baseForm                String
@@ -51,12 +93,16 @@ model Verb {
   coOccurrenceBitmask     String?
   bigramsAndPositionHex   String?
   dateAdded               DateTime        @default(now())
+  
+  // Language specification
+  language                String          @default("German")
+  languageCode            String          @default("de")
+  
   conjugations            VerbConjugation[]
   practicedBy             PracticedWord[]
   extractedInTexts        ExtractedWord[]
 }
 
-// Verb conjugation model
 model VerbConjugation {
   id          String  @id @default(cuid())
   verbId      Int
@@ -69,7 +115,6 @@ model VerbConjugation {
   formId      Int?
 }
 
-// Noun model
 model Noun {
   id                      Int             @id @default(autoincrement())
   baseForm                String
@@ -78,12 +123,16 @@ model Noun {
   coOccurrenceBitmask     String?
   bigramsAndPositionHex   String?
   dateAdded               DateTime        @default(now())
+  
+  // Language specification
+  language                String          @default("German")
+  languageCode            String          @default("de")
+  
   cases                   NounCase[]
   practicedBy             PracticedWord[]
   extractedInTexts        ExtractedWord[]
 }
 
-// Noun case model
 model NounCase {
   id          String  @id @default(cuid())
   nounId      Int
@@ -95,7 +144,6 @@ model NounCase {
   formId      Int?
 }
 
-// Adjective model
 model Adjective {
   id                      Int                 @id @default(autoincrement())
   baseForm                String
@@ -103,13 +151,17 @@ model Adjective {
   coOccurrenceBitmask     String?
   bigramsAndPositionHex   String?
   dateAdded               DateTime            @default(now())
+  
+  // Language specification
+  language                String              @default("German")
+  languageCode            String              @default("de")
+  
   declensions             AdjectiveDeclension[]
   comparativeForms        AdjectiveComparison[]
   practicedBy             PracticedWord[]
   extractedInTexts        ExtractedWord[]
 }
 
-// Adjective declension model
 model AdjectiveDeclension {
   id          String    @id @default(cuid())
   adjectiveId Int
@@ -121,7 +173,6 @@ model AdjectiveDeclension {
   formId      Int?
 }
 
-// Adjective comparison model
 model AdjectiveComparison {
   id          String    @id @default(cuid())
   adjectiveId Int
@@ -131,7 +182,6 @@ model AdjectiveComparison {
   example     String?
 }
 
-// NEW: Adverb model
 model Adverb {
   id                      Int             @id @default(autoincrement())
   baseForm                String
@@ -140,12 +190,16 @@ model Adverb {
   coOccurrenceBitmask     String?
   bigramsAndPositionHex   String?
   dateAdded               DateTime        @default(now())
+  
+  // Language specification
+  language                String          @default("German")
+  languageCode            String          @default("de")
+  
   comparativeForms        AdverbComparison[]
   practicedBy             PracticedWord[]
   extractedInTexts        ExtractedWord[]
 }
 
-// NEW: Adverb comparison model (for adverbs that can be compared like "schnell", "schneller", "am schnellsten")
 model AdverbComparison {
   id          String  @id @default(cuid())
   adverbId    Int
@@ -155,7 +209,6 @@ model AdverbComparison {
   example     String?
 }
 
-// Saved text model
 model SavedText {
   id            Int      @id @default(autoincrement())
   userId       String
@@ -167,11 +220,15 @@ model SavedText {
   wordCount    Int
   readingTime  Int
   dateAdded    DateTime        @default(now())
+  
+  // Language specification
+  language     String          @default("German")
+  languageCode String          @default("de")
+  
   extractedWords ExtractedWord[]
   stats        TextStats?
 }
 
-// Text statistics model
 model TextStats {
   id                  String    @id @default(cuid())
   savedTextId         Int         @unique
@@ -190,7 +247,6 @@ model TextStats {
   levelB2Plus         Int
 }
 
-// Extracted word model
 model ExtractedWord {
   id            String    @id @default(cuid())
   savedTextId   Int     
@@ -208,6 +264,11 @@ model ExtractedWord {
   sentenceTranslation String? @db.Text
   isRepeat            Boolean   @default(false)
   dateAdded DateTime @default(now())
+  
+  // Language specification
+  language      String    @default("German")
+  languageCode  String    @default("de")
+  
   // References to the actual word entities
   verbId        Int?
   verb          Verb?     @relation(fields: [verbId], references: [id])
@@ -215,12 +276,11 @@ model ExtractedWord {
   noun          Noun?     @relation(fields: [nounId], references: [id])
   adjectiveId   Int?
   adjective     Adjective? @relation(fields: [adjectiveId], references: [id])
-  adverbId      Int?      // NEW: Added adverb reference
-  adverb        Adverb?   @relation(fields: [adverbId], references: [id])  // NEW: Added adverb relation
+  adverbId      Int?
+  adverb        Adverb?   @relation(fields: [adverbId], references: [id])
   isKnown  Boolean  @default(false)
 }
 
-// Practiced word model
 model PracticedWord {
   id          String    @id @default(cuid())
   userId      String
@@ -232,6 +292,10 @@ model PracticedWord {
   timesCorrect Int      @default(0)
   timesWrong   Int      @default(0)
   
+  // Language specification
+  language    String    @default("German")
+  languageCode String   @default("de")
+  
   // References to the actual word entities
   verbId      Int?
   verb        Verb?     @relation(fields: [verbId], references: [id])
@@ -239,13 +303,12 @@ model PracticedWord {
   noun        Noun?     @relation(fields: [nounId], references: [id])
   adjectiveId Int?
   adjective   Adjective? @relation(fields: [adjectiveId], references: [id])
-  adverbId    Int?      // NEW: Added adverb reference
-  adverb      Adverb?   @relation(fields: [adverbId], references: [id])  // NEW: Added adverb relation
+  adverbId    Int?
+  adverb      Adverb?   @relation(fields: [adverbId], references: [id])
   
-  @@unique([userId, baseForm, type])
+  @@unique([userId, baseForm, type, languageCode])
 }
 
-// Word collocation model
 model WordCollocation {
   id          String   @id @default(cuid())
   firstWord   String
@@ -253,17 +316,19 @@ model WordCollocation {
   strength    Float    // 0-1 value representing how strong the collocation is
   example     String?
   themes      String[] // Categories/themes this collocation belongs to
+  language    String   @default("German")
+  languageCode String  @default("de")
 }
 
-// Theme category model
 model ThemeCategory {
   id          String   @id @default(cuid())
   name        String
   description String?
+  language    String   @default("German")
+  languageCode String  @default("de")
   words       ThemeCategoryWord[]
 }
 
-// Theme category word model
 model ThemeCategoryWord {
   id              String        @id @default(cuid())
   themeCategoryId String
@@ -273,4 +338,6 @@ model ThemeCategoryWord {
   level           String
   translation     String
   gender          String?
+  language        String        @default("German")
+  languageCode    String        @default("de")
 }

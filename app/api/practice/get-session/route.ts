@@ -1,14 +1,13 @@
-// API route to create and retrieve practice session data
+// Updated app/api/practice/get-session/route.ts
 import { NextRequest, NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
-import { authOptions } from '@/lib/auth' // Import your authOptions
+import { authOptions } from '@/lib/auth'
 import { PracticeEngine } from '@/lib/practice-engine'
 import { SpacedRepetitionEngine } from '@/lib/spaced-repetition'
 import { prisma } from '@/lib/db'
 
 export async function POST(request: NextRequest) {
   try {
-    // Pass authOptions to getServerSession
     const session = await getServerSession(authOptions)
     
     if (!session?.user?.id) {
@@ -19,12 +18,37 @@ export async function POST(request: NextRequest) {
     }
 
     const body = await request.json()
-    const { theme, style, wordCount = 6 } = body
+    const { 
+      theme, 
+      savedTextIds, 
+      source, 
+      style, 
+      wordCount = 6,
+      userLevel,
+      difficulty,
+      length
+    } = body
 
-    // Validate input
-    if (!theme || !style) {
+    console.log('Creating practice session with params:', {
+      source,
+      theme,
+      savedTextIds,
+      style,
+      wordCount,
+      userLevel
+    })
+
+    // Validate input based on source
+    if (source === 'theme' && !theme) {
       return NextResponse.json(
-        { error: 'Theme and style are required' },
+        { error: 'Theme is required for theme-based practice' },
+        { status: 400 }
+      )
+    }
+
+    if (source === 'saved-texts' && (!savedTextIds || savedTextIds.length === 0)) {
+      return NextResponse.json(
+        { error: 'At least one saved text is required for text-based practice' },
         { status: 400 }
       )
     }
@@ -36,19 +60,16 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    // Validate word count
-
-
-    console.log('Creating practice session for:', { theme, style, wordCount, userId: session.user.id })
-
     const practiceEngine = new PracticeEngine(session.user.id)
     
-    // Create practice session (without generated content yet)
-    const practiceSession = await practiceEngine.createPracticeSession(
+    // Create practice session with the new parameters
+    const practiceSession = await practiceEngine.createPracticeSession({
       theme,
+      savedTextIds,
+      source,
       style,
       wordCount
-    )
+    })
 
     console.log('Practice session created with target words:', practiceSession.targetWords.length)
 
@@ -123,7 +144,6 @@ export async function POST(request: NextRequest) {
 
 export async function GET(request: NextRequest) {
   try {
-    // Pass authOptions to getServerSession
     const session = await getServerSession(authOptions)
     
     if (!session?.user?.id) {
@@ -143,7 +163,16 @@ export async function GET(request: NextRequest) {
       const themes = await practiceEngine.getAvailableThemes()
       return NextResponse.json({
         success: true,
-        themes: themes.filter(theme => theme.wordCount >= 3) // Only themes with at least 3 words
+        themes: themes.filter(theme => theme.wordCount >= 3)
+      })
+    }
+
+    if (action === 'saved-texts') {
+      // Get available saved texts
+      const savedTexts = await practiceEngine.getAvailableSavedTexts()
+      return NextResponse.json({
+        success: true,
+        savedTexts
       })
     }
 
@@ -185,11 +214,16 @@ export async function GET(request: NextRequest) {
       })
     }
 
-    // Default: return available themes
-    const themes = await practiceEngine.getAvailableThemes()
+    // Default: return both themes and saved texts
+    const [themes, savedTexts] = await Promise.all([
+      practiceEngine.getAvailableThemes(),
+      practiceEngine.getAvailableSavedTexts()
+    ])
+
     return NextResponse.json({
       success: true,
-      themes: themes.filter(theme => theme.wordCount >= 3)
+      themes: themes.filter(theme => theme.wordCount >= 3),
+      savedTexts
     })
 
   } catch (error: any) {
@@ -218,7 +252,7 @@ async function calculateStreak(userId: string): Promise<number> {
       where: { userId },
       select: { lastPracticed: true },
       orderBy: { lastPracticed: 'desc' },
-      take: 100 // Check last 100 practices
+      take: 100
     })
 
     if (practiceHistory.length === 0) return 0

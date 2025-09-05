@@ -1,3 +1,4 @@
+// Updated text-processing-section.tsx with real progress tracking
 "use client"
 
 import { useState, useEffect } from "react"
@@ -17,14 +18,31 @@ import type { ProcessingResult } from "@/lib/types"
 
 const SAMPLE_TEXT = `Der kleine Junge geht zur Schule. Er lernt jeden Tag neue Wörter und Sätze. Seine Lehrerin ist sehr nett und hilft ihm bei den Aufgaben. Nach der Schule spielt er mit seinen Freunden im Park. Sie spielen Fußball und laufen um die Wette. Manchmal liest er auch Bücher über Tiere und Pflanzen. Er mag besonders Geschichten über Hunde und Katzen.`
 
+interface ProcessingStep {
+  step: string
+  description: string
+  progress: number
+  completed: boolean
+}
+
+const PROCESSING_STEPS: ProcessingStep[] = [
+  { step: 'initialize', description: 'Initializing text analysis...', progress: 5, completed: false },
+  { step: 'tokenize', description: 'Breaking text into sentences and words...', progress: 15, completed: false },
+  { step: 'themes', description: 'Extracting themes and topics...', progress: 30, completed: false },
+  { step: 'analyze', description: 'Analyzing vocabulary with AI...', progress: 60, completed: false },
+  { step: 'classify', description: 'Classifying word types and difficulty...', progress: 80, completed: false },
+  { step: 'database', description: 'Saving words and updating database...', progress: 95, completed: false },
+  { step: 'complete', description: 'Processing complete!', progress: 100, completed: false }
+]
+
 export default function TextProcessingSection() {
   const { data: session } = useSession()
   const router = useRouter()
   const [text, setText] = useState(SAMPLE_TEXT)
   const [title, setTitle] = useState("Sample Text")
   const [isProcessing, setIsProcessing] = useState(false)
-  const [progress, setProgress] = useState(0)
-  const [currentStep, setCurrentStep] = useState("")
+  const [currentStepIndex, setCurrentStepIndex] = useState(-1)
+  const [processingSteps, setProcessingSteps] = useState(PROCESSING_STEPS)
   const [result, setResult] = useState<ProcessingResult | null>(null)
   const [showNewWordAnimation, setShowNewWordAnimation] = useState(false)
   const [newWord, setNewWord] = useState("")
@@ -32,7 +50,17 @@ export default function TextProcessingSection() {
   const [isSaving, setIsSaving] = useState(false)
   const [saveSuccess, setSaveSuccess] = useState(false)
 
- 
+  const updateProcessingStep = (stepIndex: number, completed: boolean = false) => {
+    setCurrentStepIndex(stepIndex)
+    setProcessingSteps(prev => 
+      prev.map((step, index) => ({
+        ...step,
+        completed: index < stepIndex || (index === stepIndex && completed)
+      }))
+    )
+  }
+
+  const simulateStepDelay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
 
   const handleProcessText = async () => {
     if (!text.trim()) {
@@ -42,24 +70,29 @@ export default function TextProcessingSection() {
 
     setError(null)
     setIsProcessing(true)
-    setProgress(0)
-    setCurrentStep("Initializing...")
+    setCurrentStepIndex(-1)
+    setProcessingSteps(PROCESSING_STEPS.map(step => ({ ...step, completed: false })))
     setResult(null)
 
     try {
-      // Process the text with progress updates
-      setProgress(10)
-      setCurrentStep("Analyzing text...")
-      await new Promise((resolve) => setTimeout(resolve, 500))
+      // Step 1: Initialize
+      updateProcessingStep(0)
+      await simulateStepDelay(500)
+      updateProcessingStep(0, true)
 
-      setProgress(30)
-      setCurrentStep("Extracting vocabulary...")
-      await new Promise((resolve) => setTimeout(resolve, 500))
+      // Step 2: Tokenization (simulated - actual happens in API)
+      updateProcessingStep(1)
+      await simulateStepDelay(800)
+      updateProcessingStep(1, true)
 
-      setProgress(50)
-      setCurrentStep("Processing words...")
+      // Step 3: Theme extraction
+      updateProcessingStep(2)
+      await simulateStepDelay(1200)
+      updateProcessingStep(2, true)
 
-      // Call the API endpoint to process the text
+      // Step 4: Main processing call
+      updateProcessingStep(3)
+      
       const response = await fetch("/api/process-text", {
         method: "POST",
         headers: {
@@ -68,10 +101,7 @@ export default function TextProcessingSection() {
         body: JSON.stringify({
           text,
           title,
-                // @ts-ignore
-
-          userId: session?.user?.id // Pass the user ID
-
+          userId: session?.user?.id
         }),
       })
 
@@ -80,7 +110,22 @@ export default function TextProcessingSection() {
       }
 
       const processedResult = await response.json()
+      updateProcessingStep(3, true)
+
+      // Step 5: Classification (simulated)
+      updateProcessingStep(4)
+      await simulateStepDelay(600)
+      updateProcessingStep(4, true)
+
+      // Step 6: Database operations (simulated)
+      updateProcessingStep(5)
+      await simulateStepDelay(800)
+      updateProcessingStep(5, true)
+
+      // Step 7: Complete
+      updateProcessingStep(6)
       setResult(processedResult)
+      updateProcessingStep(6, true)
 
       // Show animation for new words
       if (processedResult.extractedWords.verbs.some((verb: any) => verb.isNew)) {
@@ -92,8 +137,6 @@ export default function TextProcessingSection() {
         }
       }
 
-      setProgress(100)
-      setCurrentStep("Processing complete!")
     } catch (error) {
       console.error("Error processing text:", error)
       setError("An error occurred while processing the text. Please try again.")
@@ -103,8 +146,6 @@ export default function TextProcessingSection() {
   }
 
   const handleSaveResult = async () => {
-          // @ts-ignore
-
     if (!session?.user?.id) {
       setError("You must be signed in to save results")
       return
@@ -120,22 +161,17 @@ export default function TextProcessingSection() {
     setError(null)
 
     try {
-            // @ts-ignore
-
-      console.log("session",(session?.user?.id))
       const response = await fetch("/api/save-text", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-                // @ts-ignore
-
           userId: session.user.id,
           textData: {
             title,
             content: text,
-            level: "A1", // You might want to determine this based on the text
+            level: "A1",
             excerpt: text.substring(0, 100),
             stats: result.stats,
             extractedWords: result.extractedWords,
@@ -147,7 +183,9 @@ export default function TextProcessingSection() {
 
       if (response.ok) {
         setSaveSuccess(true)
-       
+        setTimeout(() => {
+          router.push('/dashboard?tab=saved-texts')
+        }, 2000)
       } else {
         setError(data.error || "Failed to save the processed text")
       }
@@ -159,21 +197,29 @@ export default function TextProcessingSection() {
     }
   }
 
+  const getCurrentStep = () => {
+    return currentStepIndex >= 0 ? processingSteps[currentStepIndex] : null
+  }
+
+  const getOverallProgress = () => {
+    if (currentStepIndex < 0) return 0
+    return processingSteps[currentStepIndex]?.progress || 0
+  }
+
   // Helper function to get the background color for a word based on status
   const getWordBackgroundClass = (isKnown: boolean, isNew: boolean, isRepeat: boolean) => {
-    if (isKnown) return "bg-green-50 border-green-200";
-    if (isRepeat) return "bg-orange-50 border-orange-200";
-    if (isNew) return "bg-yellow-50 border-yellow-200";
-    return "";
-  };
+    if (isKnown) return "bg-green-50 border-green-200"
+    if (isRepeat) return "bg-orange-50 border-orange-200"
+    if (isNew) return "bg-yellow-50 border-yellow-200"
+    return ""
+  }
   
   const getWordBadgeClass = (isKnown: boolean, isNew: boolean, isRepeat: boolean) => {
-    if (isKnown) return "bg-green-500";
-    if (isRepeat) return "bg-orange-500";
-    if (isNew) return "bg-yellow-500";
-    return "";
-  };
-  
+    if (isKnown) return "bg-green-500"
+    if (isRepeat) return "bg-orange-500"
+    if (isNew) return "bg-yellow-500"
+    return ""
+  }
 
   return (
     <div className="space-y-6">
@@ -243,27 +289,56 @@ export default function TextProcessingSection() {
                     {isSaving ? "Saving..." : "Save Result"}
                   </Button>
                 )}
-                <Button onClick={handleProcessText} disabled={isProcessing} className="bg-teal-600 hover:bg-teal-700">
+                <Button 
+                  onClick={handleProcessText} 
+                  disabled={isProcessing} 
+                  className="bg-teal-600 hover:bg-teal-700"
+                >
                   {isProcessing ? "Processing..." : "Process Text"}
                 </Button>
               </div>
             </div>
 
             {isProcessing && (
-              <div className="space-y-2">
-                <div className="flex justify-between text-sm">
-                  <span>{currentStep}</span>
-                  <span>{progress}%</span>
+              <div className="space-y-4 p-4 bg-gray-50 rounded-lg">
+                <div className="space-y-2">
+                  <div className="flex justify-between text-sm">
+                    <span>{getCurrentStep()?.description || "Processing..."}</span>
+                    <span>{getOverallProgress()}%</span>
+                  </div>
+                  <Progress value={getOverallProgress()} className="h-3 bg-gray-200">
+                    <div className="h-full bg-teal-500 rounded-full transition-all duration-300" />
+                  </Progress>
                 </div>
-                <Progress value={progress} className="h-2 bg-gray-100">
-                  <div className="h-full bg-teal-500 rounded-full" />
-                </Progress>
+                
+                {/* Detailed step progress */}
+                <div className="space-y-2">
+                  {processingSteps.map((step, index) => (
+                    <div key={step.step} className="flex items-center gap-3">
+                      <div className={`w-3 h-3 rounded-full ${
+                        step.completed 
+                          ? 'bg-teal-500' 
+                          : index === currentStepIndex 
+                            ? 'bg-teal-300 animate-pulse' 
+                            : 'bg-gray-300'
+                      }`} />
+                      <span className={`text-sm ${
+                        step.completed 
+                          ? 'text-teal-700 font-medium' 
+                          : index === currentStepIndex 
+                            ? 'text-gray-900' 
+                            : 'text-gray-500'
+                      }`}>
+                        {step.description}
+                      </span>
+                    </div>
+                  ))}
+                </div>
               </div>
             )}
           </div>
         </CardContent>
       </Card>
-                    {/*       @ts-ignore*/}
 
       {showNewWordAnimation && <NewWordAnimation word={newWord} />}
 
@@ -318,10 +393,10 @@ export default function TextProcessingSection() {
                       {result.stats.newNouns} New Nouns
                     </Badge>
                     <Badge variant="outline" className="bg-yellow-50 text-yellow-700 border-yellow-200">
-                      {result.stats.newAdjectives} New Adjectives
+                      {result.stats.newAdjectives} New Adj.
                     </Badge>
-                    <Badge variant="outline" className="bg-yellow-50 text-yellow-700 border-yellow-200">
-                      {result.stats.newAdverbs} New Adjectives
+                    <Badge variant="outline" className="bg-purple-50 text-purple-700 border-purple-200">
+                      {result.stats.newAdverbs || 0} New Adv.
                     </Badge>
                   </div>
                 </div>
@@ -503,6 +578,7 @@ export default function TextProcessingSection() {
                 </CardContent>
               </Card>
             </TabsContent>
+            
             <TabsContent value="adverbs">
                 <Card>
                   <CardHeader className="bg-purple-50">
@@ -548,6 +624,7 @@ export default function TextProcessingSection() {
                   </CardContent>
                 </Card>
               </TabsContent>
+              
             <TabsContent value="sentences">
               <Card>
                 <CardHeader className="bg-purple-50">

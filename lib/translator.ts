@@ -1,4 +1,4 @@
-// Ultra-robust translator.ts - Process sentences individually for maximum reliability
+// Updated translator.ts - Dynamic language support
 import OpenAI from 'openai'
 
 // Initialize Groq API client
@@ -16,17 +16,91 @@ const GROQ_MODELS = {
 
 const DEFAULT_MODEL = GROQ_MODELS.LLAMA_33_70B
 
+// Language-specific configurations
+const LANGUAGE_CONFIGS = {
+  de: {
+    name: 'German',
+    hasGender: true,
+    hasCases: true,
+    hasConjugations: true,
+    verbEnding: 'en',
+    commonVerbs: ['sein', 'haben', 'werden', 'gehen', 'kommen', 'sehen', 'machen', 'können', 'müssen', 'sollen'],
+    grammarFeatures: ['conjugations', 'cases', 'gender']
+  },
+  es: {
+    name: 'Spanish',
+    hasGender: true,
+    hasCases: false,
+    hasConjugations: true,
+    verbEnding: 'ar|er|ir',
+    commonVerbs: ['ser', 'estar', 'tener', 'hacer', 'ir', 'ver', 'dar', 'saber', 'querer', 'llegar'],
+    grammarFeatures: ['conjugations', 'gender']
+  },
+  fr: {
+    name: 'French',
+    hasGender: true,
+    hasCases: false,
+    hasConjugations: true,
+    verbEnding: 'er|ir|re',
+    commonVerbs: ['être', 'avoir', 'faire', 'dire', 'aller', 'voir', 'savoir', 'prendre', 'venir', 'vouloir'],
+    grammarFeatures: ['conjugations', 'gender']
+  },
+  it: {
+    name: 'Italian',
+    hasGender: true,
+    hasCases: false,
+    hasConjugations: true,
+    verbEnding: 'are|ere|ire',
+    commonVerbs: ['essere', 'avere', 'fare', 'dire', 'andare', 'vedere', 'sapere', 'dare', 'stare', 'venire'],
+    grammarFeatures: ['conjugations', 'gender']
+  },
+  pt: {
+    name: 'Portuguese',
+    hasGender: true,
+    hasCases: false,
+    hasConjugations: true,
+    verbEnding: 'ar|er|ir',
+    commonVerbs: ['ser', 'estar', 'ter', 'fazer', 'ir', 'ver', 'dar', 'saber', 'querer', 'chegar'],
+    grammarFeatures: ['conjugations', 'gender']
+  },
+  tr: {
+    name: 'Turkish',
+    hasGender: false,
+    hasCases: true,
+    hasConjugations: true,
+    verbEnding: 'mak|mek',
+    commonVerbs: ['olmak', 'etmek', 'yapmak', 'gelmek', 'gitmek', 'görmek', 'bilmek', 'almak', 'vermek', 'çıkmak'],
+    grammarFeatures: ['conjugations', 'cases']
+  },
+  nl: {
+    name: 'Dutch',
+    hasGender: true,
+    hasCases: false,
+    hasConjugations: true,
+    verbEnding: 'en',
+    commonVerbs: ['zijn', 'hebben', 'worden', 'gaan', 'komen', 'zien', 'maken', 'kunnen', 'moeten', 'willen'],
+    grammarFeatures: ['conjugations', 'gender']
+  },
+  sv: {
+    name: 'Swedish',
+    hasGender: true,
+    hasCases: false,
+    hasConjugations: true,
+    verbEnding: 'a',
+    commonVerbs: ['vara', 'ha', 'bli', 'gå', 'komma', 'se', 'göra', 'kunna', 'ska', 'vilja'],
+    grammarFeatures: ['conjugations', 'gender']
+  }
+}
+
 // Improved JSON extraction with better error handling
 function extractJsonFromResponse(text: string): string {
   console.log("Raw response length:", text.length)
   
-  // Remove markdown code blocks if present
   const jsonMatch = text.match(/```(?:json)?\s*([\s\S]*?)\s*```/)
   if (jsonMatch) {
     return jsonMatch[1].trim()
   }
   
-  // Try to find JSON object boundaries
   const startIndex = text.indexOf('{')
   const lastIndex = text.lastIndexOf('}')
   
@@ -40,37 +114,26 @@ function extractJsonFromResponse(text: string): string {
 // Safe JSON parser with multiple fallback strategies
 function safeParseJson(jsonString: string): any {
   const attempts = [
-    // Attempt 1: Parse as-is
     () => JSON.parse(jsonString),
-    
-    // Attempt 2: Fix common issues
     () => {
       let fixed = jsonString
-        .replace(/,(\s*[}\]])/g, '$1') // Remove trailing commas
-        .replace(/([^"])\n/g, '$1') // Remove unexpected newlines
-        .replace(/,\s*$/, '') // Remove final trailing comma
+        .replace(/,(\s*[}\]])/g, '$1')
+        .replace(/([^"])\n/g, '$1')
+        .replace(/,\s*$/, '')
       
-      // Fix incomplete strings
       fixed = fixed.replace(/"([^"]*?)$/gm, '"$1"')
-      
       return JSON.parse(fixed)
     },
-    
-    // Attempt 3: Aggressive cleanup
     () => {
       let fixed = jsonString
-      
-      // Remove any incomplete final entries
       fixed = fixed.replace(/,\s*"[^"]*":\s*\{[^}]*$/g, '')
       fixed = fixed.replace(/,\s*"[^"]*":\s*"[^"]*$/g, '')
       fixed = fixed.replace(/,\s*"[^"]*":\s*\[[^\]]*$/g, '')
       
-      // Ensure proper structure
       if (fixed.includes('"sentences"') && !fixed.includes('"sentences": [')) {
         fixed = '{"sentences": []}'
       }
       
-      // Add missing closing brackets
       const openBraces = (fixed.match(/{/g) || []).length
       const closeBraces = (fixed.match(/}/g) || []).length
       fixed += '}'.repeat(Math.max(0, openBraces - closeBraces))
@@ -97,11 +160,13 @@ function safeParseJson(jsonString: string): any {
   }
 }
 
-export function createTranslator() {
+export function createTranslator(languageCode: string = 'de', translationCode: string = 'en') {
+  const languageConfig = LANGUAGE_CONFIGS[languageCode as keyof typeof LANGUAGE_CONFIGS] || LANGUAGE_CONFIGS.de
+  
   return {
     generateContent: async (prompt: string) => {
       try {
-        console.log("Generating content with Groq:", prompt.substring(0, 100) + "...")
+        console.log(`Generating content with Groq for ${languageConfig.name}:`, prompt.substring(0, 100) + "...")
         
         const completion = await groq.chat.completions.create({
           model: DEFAULT_MODEL,
@@ -121,14 +186,17 @@ export function createTranslator() {
 
     translate: async (text: string, options: { from: string; to: string }, context?: string) => {
       try {
+        const fromLang = LANGUAGE_CONFIGS[options.from as keyof typeof LANGUAGE_CONFIGS]?.name || options.from
+        const toLang = LANGUAGE_CONFIGS[options.to as keyof typeof LANGUAGE_CONFIGS]?.name || options.to
+        
         let prompt: string
         
         if (context) {
-          prompt = `Translate the German word "${text}" to English considering this context: "${context}". 
-          Provide only the most appropriate English translation based on the context. 
+          prompt = `Translate the ${fromLang} word "${text}" to ${toLang} considering this context: "${context}". 
+          Provide only the most appropriate ${toLang} translation based on the context. 
           Do not include explanations, just the translation.`
         } else {
-          prompt = `Translate this German text to English: "${text}". 
+          prompt = `Translate this ${fromLang} text to ${toLang}: "${text}". 
           Provide only the translation, no explanations.`
         }
 
@@ -148,38 +216,104 @@ export function createTranslator() {
     },
 
     getVerbConjugations: async (baseForm: string) => {
+      if (!languageConfig.hasConjugations) {
+        console.log(`${languageConfig.name} does not support conjugations`)
+        return { baseForm, conjugations: {} }
+      }
+
       try {
-        const prompt = `Provide complete conjugation for the German verb "${baseForm}".
+        let conjugationStructure = ''
+        let grammarInstructions = ''
+
+        switch (languageCode) {
+          case 'de':
+            conjugationStructure = `{
+              "present": {
+                "indicative": {
+                  "SG": { "1": { "form": "ich form" }, "2": { "form": "du form" }, "3": { "form": "er/sie/es form" } },
+                  "PL": { "1": { "form": "wir form" }, "2": { "form": "ihr form" }, "3": { "form": "sie/Sie form" } }
+                }
+              }
+            }`
+            grammarInstructions = 'Provide accurate German verb conjugations including present and past tense.'
+            break
+          
+          case 'es':
+            conjugationStructure = `{
+              "present": {
+                "indicative": {
+                  "SG": { "1": { "form": "yo form" }, "2": { "form": "tú form" }, "3": { "form": "él/ella form" } },
+                  "PL": { "1": { "form": "nosotros form" }, "2": { "form": "vosotros form" }, "3": { "form": "ellos form" } }
+                }
+              }
+            }`
+            grammarInstructions = 'Provide accurate Spanish verb conjugations including present tense.'
+            break
+
+          case 'fr':
+            conjugationStructure = `{
+              "present": {
+                "indicative": {
+                  "SG": { "1": { "form": "je form" }, "2": { "form": "tu form" }, "3": { "form": "il/elle form" } },
+                  "PL": { "1": { "form": "nous form" }, "2": { "form": "vous form" }, "3": { "form": "ils/elles form" } }
+                }
+              }
+            }`
+            grammarInstructions = 'Provide accurate French verb conjugations including present tense.'
+            break
+
+          case 'it':
+            conjugationStructure = `{
+              "present": {
+                "indicative": {
+                  "SG": { "1": { "form": "io form" }, "2": { "form": "tu form" }, "3": { "form": "lui/lei form" } },
+                  "PL": { "1": { "form": "noi form" }, "2": { "form": "voi form" }, "3": { "form": "loro form" } }
+                }
+              }
+            }`
+            grammarInstructions = 'Provide accurate Italian verb conjugations including present tense.'
+            break
+
+          case 'tr':
+            conjugationStructure = `{
+              "present": {
+                "indicative": {
+                  "SG": { "1": { "form": "ben form" }, "2": { "form": "sen form" }, "3": { "form": "o form" } },
+                  "PL": { "1": { "form": "biz form" }, "2": { "form": "siz form" }, "3": { "form": "onlar form" } }
+                }
+              }
+            }`
+            grammarInstructions = 'Provide accurate Turkish verb conjugations including present tense with personal endings.'
+            break
+
+          default:
+            conjugationStructure = `{
+              "present": {
+                "indicative": {
+                  "SG": { "1": { "form": "1st person singular" }, "2": { "form": "2nd person singular" }, "3": { "form": "3rd person singular" } },
+                  "PL": { "1": { "form": "1st person plural" }, "2": { "form": "2nd person plural" }, "3": { "form": "3rd person plural" } }
+                }
+              }
+            }`
+            grammarInstructions = `Provide accurate ${languageConfig.name} verb conjugations.`
+        }
+
+        const prompt = `Provide complete conjugation for the ${languageConfig.name} verb "${baseForm}".
 
 Please provide a JSON response with the following structure (return ONLY the JSON, no markdown formatting):
 {
   "baseForm": "${baseForm}",
-  "conjugations": {
-    "present": {
-      "indicative": {
-        "SG": {
-          "1": { "form": "ich form", "person": "1" },
-          "2": { "form": "du form", "person": "2" },
-          "3": { "form": "er/sie/es form", "person": "3" }
-        },
-        "PL": {
-          "1": { "form": "wir form", "person": "1" },
-          "2": { "form": "ihr form", "person": "2" },
-          "3": { "form": "sie/Sie form", "person": "3" }
-        }
-      }
-    }
-  }
+  "conjugations": ${conjugationStructure}
 }
 
-Provide accurate German conjugations. Return ONLY valid JSON, no additional text.`
+${grammarInstructions} Return ONLY valid JSON, no additional text.`
 
         const completion = await groq.chat.completions.create({
           model: DEFAULT_MODEL,
           messages: [
             {
               role: "system",
-              content: "You are a German language expert. Provide accurate verb conjugations in JSON format."
+              content: `You are a ${languageConfig.name} language expert. Provide accurate verb conjugations in JSON format.`
             },
             { role: "user", content: prompt }
           ],
@@ -191,10 +325,10 @@ Provide accurate German conjugations. Return ONLY valid JSON, no additional text
         const cleanJson = extractJsonFromResponse(conjugationText)
         const conjugations = safeParseJson(cleanJson)
         
-        console.log("Successfully retrieved conjugations for:", baseForm)
+        console.log(`Successfully retrieved conjugations for ${languageConfig.name} verb:`, baseForm)
         return conjugations
       } catch (error) {
-        console.error("Error getting verb conjugations with Groq:", error)
+        console.error(`Error getting verb conjugations for ${languageConfig.name}:`, error)
         return {
           baseForm,
           conjugations: {
@@ -204,36 +338,52 @@ Provide accurate German conjugations. Return ONLY valid JSON, no additional text
       }
     },
 
-    // NEW APPROACH: Process each sentence individually for maximum reliability
     batchAnalyzeEntireText: async (
       sentences: Array<{text: string, words: string[]}>, 
       extractedThemes?: any[], 
       includeConjugations: boolean = false,
-      maxWordsPerBatch: number = 50 // Process very small chunks or individual sentences
+      maxWordsPerBatch: number = 50
     ) => {
       try {
-        console.log(`Processing ${sentences.length} sentences individually with Groq (${DEFAULT_MODEL})`)
+        console.log(`Processing ${sentences.length} sentences in ${languageConfig.name} with Groq (${DEFAULT_MODEL})`)
         
         const allResults = []
         const themes = extractedThemes || []
         const themeNames = themes.map(t => t.name).join(', ')
         
+        // Generate verb detection patterns based on language
+        const verbPatterns = languageConfig.commonVerbs.join('|')
+        const verbEndingPattern = languageConfig.verbEnding
+        
         for (let sentenceIndex = 0; sentenceIndex < sentences.length; sentenceIndex++) {
           const sentence = sentences[sentenceIndex]
-          console.log(`Processing sentence ${sentenceIndex + 1}/${sentences.length}: "${sentence.text.substring(0, 50)}..."`)
+          console.log(`Processing ${languageConfig.name} sentence ${sentenceIndex + 1}/${sentences.length}: "${sentence.text.substring(0, 50)}..."`)
           
-          const wordsToAnalyze = sentence.words.slice(0, 15) // Limit words per sentence to prevent overload
+          const wordsToAnalyze = sentence.words.slice(0, 15)
           
-          const conjugationInstruction = includeConjugations ? `
+          const conjugationInstruction = includeConjugations && languageConfig.hasConjugations ? `
           
 For VERBS ONLY, also include basic conjugation information:
 "conjugationHint": {
-  "presentSG3": "er/sie/es form",
-  "pastSG1": "ich past form", 
-  "imperativeSG": "du imperative form"
+  "presentSG3": "3rd person singular present form",
+  "pastSG1": "1st person singular past form", 
+  "imperativeSG": "singular imperative form"
 }` : ''
 
-          const prompt = `Analyze this German sentence and all its words:
+          // Build grammar features instruction based on language
+          let grammarFeatures = ''
+          if (languageConfig.hasGender) {
+            grammarFeatures += '"gender": "MASC|FEM|NEUT|null",'
+          }
+          if (languageConfig.hasCases) {
+            grammarFeatures += '"case": "NOM|ACC|DAT|GEN|null",'
+          }
+          grammarFeatures += '"tense": "present|past|perfect|future|null",'
+          grammarFeatures += '"person": "1|2|3|null",'
+          grammarFeatures += '"number": "SG|PL|null",'
+          grammarFeatures += '"adverbType": "time|place|manner|degree|other|null"'
+
+          const prompt = `Analyze this ${languageConfig.name} sentence and all its words:
 
 Sentence: "${sentence.text}"
 Words to analyze: ${wordsToAnalyze.map(w => `"${w}"`).join(', ')}
@@ -241,27 +391,22 @@ Words to analyze: ${wordsToAnalyze.map(w => `"${w}"`).join(', ')}
 Available themes: ${themeNames}
 
 CRITICAL INSTRUCTIONS:
-- Identify ALL VERBS correctly (infinitives ending -en, conjugated forms, past participles with ge-)
-- Common verbs: sein (ist, sind), haben (hat, haben), werden (wird), geben, machen, kommen, gehen
+- Identify ALL VERBS correctly (infinitives, conjugated forms, participles)
+- Common ${languageConfig.name} verbs: ${languageConfig.commonVerbs.join(', ')}
 - Return COMPLETE, VALID JSON only
 
 JSON structure (return ONLY this, no markdown):
 {
-  "sentenceTranslation": "Complete English translation of the sentence",
+  "sentenceTranslation": "Complete ${LANGUAGE_CONFIGS[translationCode as keyof typeof LANGUAGE_CONFIGS]?.name || 'English'} translation of the sentence",
   "words": {
     "${wordsToAnalyze[0] || 'word'}": {
       "baseForm": "base form",
       "wordType": "VERB|NOUN|ADJECTIVE|ADVERB|PREPOSITION|ARTICLE|PRONOUN",
       "level": "A1|A2|B1|B2|C1|C2",
-      "translation": "English translation based on context",
+      "translation": "${LANGUAGE_CONFIGS[translationCode as keyof typeof LANGUAGE_CONFIGS]?.name || 'English'} translation based on context",
       "themes": ["relevant", "themes"],${conjugationInstruction}
       "grammaticalInfo": {
-        "gender": "MASC|FEM|NEUT|null",
-        "case": "NOM|ACC|DAT|GEN|null",
-        "tense": "present|past|perfect|future|null",
-        "person": "1|2|3|null",
-        "number": "SG|PL|null",
-        "adverbType": "time|place|manner|degree|other|null"
+        ${grammarFeatures}
       }
     }
   }
@@ -275,12 +420,12 @@ Include ALL words from the list. Ensure verbs are marked as "VERB". Return ONLY 
               messages: [
                 {
                   role: "system",
-                  content: "You are a German language expert. Analyze sentences and identify ALL verbs correctly. Always return complete, valid JSON responses with all requested words analyzed."
+                  content: `You are a ${languageConfig.name} language expert. Analyze sentences and identify ALL verbs correctly. Always return complete, valid JSON responses with all requested words analyzed.`
                 },
                 { role: "user", content: prompt }
               ],
-              temperature: 0.05, // Very low for maximum consistency
-              max_tokens: 1500, // Conservative limit for individual sentences
+              temperature: 0.05,
+              max_tokens: 1500,
               top_p: 0.8
             })
             
@@ -293,7 +438,6 @@ Include ALL words from the list. Ensure verbs are marked as "VERB". Return ONLY 
             const cleanJson = extractJsonFromResponse(analysisText)
             const analysis = safeParseJson(cleanJson)
             
-            // Validate the analysis structure
             if (!analysis.sentenceTranslation || !analysis.words) {
               throw new Error("Invalid analysis structure - missing required fields")
             }
@@ -303,10 +447,10 @@ Include ALL words from the list. Ensure verbs are marked as "VERB". Return ONLY 
             if (missingWords.length > 0) {
               console.log(`Adding ${missingWords.length} missing words for sentence ${sentenceIndex + 1}`)
               
-              // Add missing words with basic analysis
               missingWords.forEach(word => {
-                const isLikelyVerb = word.endsWith('en') || word.startsWith('ge') || 
-                  ['ist', 'sind', 'war', 'waren', 'hat', 'haben', 'wird', 'werden', 'kann', 'muss'].includes(word.toLowerCase())
+                // Language-specific verb detection
+                const isLikelyVerb = new RegExp(`(${verbEndingPattern})$`).test(word) || 
+                  languageConfig.commonVerbs.some(v => word.toLowerCase().includes(v.toLowerCase()))
                 
                 analysis.words[word] = {
                   baseForm: word,
@@ -314,19 +458,18 @@ Include ALL words from the list. Ensure verbs are marked as "VERB". Return ONLY 
                   level: "A2",
                   translation: `[Translation needed: ${word}]`,
                   themes: ["General"],
-                  grammaticalInfo: {
-                    gender: null,
-                    case: null,
-                    tense: isLikelyVerb ? "present" : null,
-                    person: null,
-                    number: null,
-                    adverbType: null
-                  }
+                  grammaticalInfo: Object.fromEntries([
+                    ...(languageConfig.hasGender ? [["gender", null]] : []),
+                    ...(languageConfig.hasCases ? [["case", null]] : []),
+                    ["tense", isLikelyVerb ? "present" : null],
+                    ["person", null],
+                    ["number", null],
+                    ["adverbType", null]
+                  ])
                 }
               })
             }
             
-            // Convert to the expected format
             const sentenceResult = {
               sentenceTranslation: analysis.sentenceTranslation,
               words: analysis.words
@@ -334,25 +477,21 @@ Include ALL words from the list. Ensure verbs are marked as "VERB". Return ONLY 
             
             allResults.push(sentenceResult)
             
-            // Count verbs for debugging
             const verbCount = Object.values(analysis.words).filter((word: any) => word.wordType === 'VERB').length
-            console.log(`Successfully processed sentence ${sentenceIndex + 1}, found ${verbCount} verbs`)
+            console.log(`Successfully processed ${languageConfig.name} sentence ${sentenceIndex + 1}, found ${verbCount} verbs`)
             
-            // Delay between requests to prevent rate limiting
             if (sentenceIndex < sentences.length - 1) {
               await new Promise(resolve => setTimeout(resolve, 800))
             }
             
           } catch (sentenceError) {
-            console.error(`Error processing sentence ${sentenceIndex + 1}:`, sentenceError)
-            console.log("Failed sentence:", sentence.text)
+            console.error(`Error processing ${languageConfig.name} sentence ${sentenceIndex + 1}:`, sentenceError)
             
-            // Fallback for this sentence with improved verb detection
+            // Fallback for this sentence
             const fallbackWords: any = {}
             sentence.words.forEach(word => {
-              const isLikelyVerb = word.endsWith('en') || word.startsWith('ge') || 
-                ['ist', 'sind', 'war', 'waren', 'hat', 'haben', 'wird', 'werden', 'kann', 'muss', 'soll', 'will'].includes(word.toLowerCase()) ||
-                word.match(/^(präsentiert|synthetisiert|schöpfen|begann|gegründet|bewarben|ausgewählt|trainiert|arbeiteten|erhielten|stattfanden)$/i)
+              const isLikelyVerb = new RegExp(`(${verbEndingPattern})$`).test(word) || 
+                languageConfig.commonVerbs.some(v => word.toLowerCase().includes(v.toLowerCase()))
               
               fallbackWords[word] = {
                 baseForm: word,
@@ -360,14 +499,14 @@ Include ALL words from the list. Ensure verbs are marked as "VERB". Return ONLY 
                 level: "A2",
                 translation: `[Translation of: ${word}]`,
                 themes: themes.length > 0 ? [themes[0].name] : ["General"],
-                grammaticalInfo: {
-                  gender: null,
-                  case: null,
-                  tense: isLikelyVerb ? "present" : null,
-                  person: null,
-                  number: null,
-                  adverbType: null
-                }
+                grammaticalInfo: Object.fromEntries([
+                  ...(languageConfig.hasGender ? [["gender", null]] : []),
+                  ...(languageConfig.hasCases ? [["case", null]] : []),
+                  ["tense", isLikelyVerb ? "present" : null],
+                  ["person", null],
+                  ["number", null],
+                  ["adverbType", null]
+                ])
               }
             })
             
@@ -380,27 +519,25 @@ Include ALL words from the list. Ensure verbs are marked as "VERB". Return ONLY 
           }
         }
         
-        console.log(`Individual sentence processing complete: processed ${allResults.length} sentences`)
+        console.log(`${languageConfig.name} sentence processing complete: processed ${allResults.length} sentences`)
         
-        // Log final verb statistics
         const totalVerbs = allResults.reduce((count, sentence) => {
           return count + Object.values(sentence.words || {}).filter((word: any) => word.wordType === 'VERB').length
         }, 0)
-        console.log(`Total verbs found: ${totalVerbs}`)
+        console.log(`Total ${languageConfig.name} verbs found: ${totalVerbs}`)
         
         return { sentences: allResults }
         
       } catch (error) {
-        console.error("Error in individual sentence processing:", error)
+        console.error(`Error in ${languageConfig.name} sentence processing:`, error)
         
-        // Complete fallback with improved verb detection
+        // Complete fallback
         const fallbackAnalysis = {
           sentences: sentences.map(s => ({
             sentenceTranslation: `[Translation of: ${s.text}]`,
             words: Object.fromEntries(s.words.map(word => {
-              const isLikelyVerb = word.endsWith('en') || word.startsWith('ge') || 
-                ['ist', 'sind', 'war', 'waren', 'hat', 'haben', 'wird', 'werden'].includes(word.toLowerCase()) ||
-                word.match(/^(präsentiert|synthetisiert|schöpfen|begann|gegründet|bewarben|ausgewählt|trainiert|arbeiteten|erhielten|stattfanden)$/i)
+              const isLikelyVerb = new RegExp(`(${verbEndingPattern})$`).test(word) || 
+                languageConfig.commonVerbs.some(v => word.toLowerCase().includes(v.toLowerCase()))
               
               return [word, {
                 baseForm: word,
@@ -408,118 +545,27 @@ Include ALL words from the list. Ensure verbs are marked as "VERB". Return ONLY 
                 level: "A2",
                 translation: `[Translation of: ${word}]`,
                 themes: ["General"],
-                grammaticalInfo: {
-                  gender: null,
-                  case: null,
-                  tense: isLikelyVerb ? "present" : null,
-                  person: null,
-                  number: null,
-                  adverbType: null
-                }
+                grammaticalInfo: Object.fromEntries([
+                  ...(languageConfig.hasGender ? [["gender", null]] : []),
+                  ...(languageConfig.hasCases ? [["case", null]] : []),
+                  ["tense", isLikelyVerb ? "present" : null],
+                  ["person", null],
+                  ["number", null],
+                  ["adverbType", null]
+                ])
               }]
             }))
           }))
         }
         
-        console.log("Using complete fallback analysis")
+        console.log(`Using complete fallback analysis for ${languageConfig.name}`)
         return fallbackAnalysis
-      }
-    },
-
-    // Legacy method kept for compatibility
-    batchAnalyzeText: async (
-      sentences: Array<{text: string, words: string[]}>, 
-      extractedThemes?: any[], 
-      includeConjugations: boolean = false
-    ) => {
-      console.log("Using individual sentence processing for maximum reliability")
-      return this.batchAnalyzeEntireText(sentences, extractedThemes, includeConjugations, 50)
-    },
-
-    analyzeSentence: async (sentence: string, words: string[]) => {
-      try {
-        const prompt = `Analyze this German sentence: "${sentence}"
-
-Words to analyze: ${words.map(w => `"${w}"`).join(', ')}
-
-IMPORTANT: Identify ALL VERBS correctly. Return ONLY valid JSON:
-
-{
-  "sentenceTranslation": "Complete English translation of the sentence",
-  "words": {
-    "${words[0] || 'example'}": {
-      "baseForm": "base form of the word",
-      "wordType": "VERB|NOUN|ADJECTIVE|ADVERB|PREPOSITION|ARTICLE|PRONOUN",
-      "level": "A1|A2|B1|B2|C1|C2",
-      "translation": "English translation based on context",
-      "grammaticalInfo": {
-        "gender": "MASC|FEM|NEUT|null",
-        "case": "NOM|ACC|DAT|GEN|null",
-        "tense": "present|past|perfect|future|null",
-        "person": "1|2|3|null",
-        "number": "SG|PL|null",
-        "adverbType": "time|place|manner|degree|other|null"
-      }
-    }
-  }
-}
-
-Return ONLY valid JSON for all words.`
-
-        const completion = await groq.chat.completions.create({
-          model: DEFAULT_MODEL,
-          messages: [
-            {
-              role: "system",
-              content: "You are a German language expert. Analyze German sentences and identify ALL verbs correctly. Return complete JSON."
-            },
-            { role: "user", content: prompt }
-          ],
-          temperature: 0.1,
-          max_tokens: 2000
-        })
-        
-        const analysisText = completion.choices[0]?.message?.content?.trim() || ""
-        const cleanJson = extractJsonFromResponse(analysisText)
-        const analysis = safeParseJson(cleanJson)
-        
-        console.log("Successfully parsed sentence analysis")
-        return analysis
-      } catch (error) {
-        console.error("Error analyzing sentence with Groq:", error)
-        
-        // Improved fallback with verb detection
-        const fallbackWords: any = {}
-        words.forEach(word => {
-          const isLikelyVerb = word.endsWith('en') || word.startsWith('ge') || 
-            ['ist', 'sind', 'war', 'waren', 'hat', 'haben', 'wird', 'werden'].includes(word.toLowerCase())
-          
-          fallbackWords[word] = {
-            baseForm: word,
-            wordType: isLikelyVerb ? "VERB" : "NOUN",
-            level: "A2",
-            translation: `[Translation of: ${word}]`,
-            grammaticalInfo: {
-              gender: null,
-              case: null,
-              tense: isLikelyVerb ? "present" : null,
-              person: null,
-              number: null,
-              adverbType: null
-            }
-          }
-        })
-        
-        return {
-          sentenceTranslation: `[Translation of: ${sentence}]`,
-          words: fallbackWords
-        }
       }
     },
 
     extractThemes: async (text: string, title: string) => {
       try {
-        const prompt = `Analyze this German text about dance and identify the main themes:
+        const prompt = `Analyze this ${languageConfig.name} text and identify the main themes:
         
         Title: "${title}"
         Text: "${text}"
@@ -528,22 +574,22 @@ Return ONLY valid JSON for all words.`
         {
           "themes": [
             {
-              "name": "Theme name in English",
+              "name": "Theme name in ${LANGUAGE_CONFIGS[translationCode as keyof typeof LANGUAGE_CONFIGS]?.name || 'English'}",
               "description": "Brief description",
               "relevance": "high|medium|low",
-              "keywords": ["german", "words", "related"]
+              "keywords": ["${languageCode}", "words", "related"]
             }
           ]
         }
         
-        Focus on themes like: Dance & Music, Arts & Performance, Culture & Tradition, Travel & Tourism, Education & Training`
+        Focus on themes relevant to ${languageConfig.name} language learning.`
 
         const completion = await groq.chat.completions.create({
           model: DEFAULT_MODEL,
           messages: [
             {
               role: "system",
-              content: "You are a text analysis expert. Identify themes in German texts and return valid JSON."
+              content: `You are a text analysis expert. Identify themes in ${languageConfig.name} texts and return valid JSON.`
             },
             { role: "user", content: prompt }
           ],
@@ -555,23 +601,17 @@ Return ONLY valid JSON for all words.`
         const cleanJson = extractJsonFromResponse(analysisText)
         const themes = safeParseJson(cleanJson)
         
-        console.log("Successfully extracted themes:", themes)
+        console.log(`Successfully extracted themes for ${languageConfig.name}:`, themes)
         return themes
       } catch (error) {
-        console.error("Error extracting themes with Groq:", error)
+        console.error(`Error extracting themes for ${languageConfig.name}:`, error)
         return {
           themes: [
             {
-              name: "Dance & Music",
-              description: "Dance performances and musical elements",
+              name: "Language Learning",
+              description: `${languageConfig.name} language learning content`,
               relevance: "high",
-              keywords: ["tanz", "musik", "rhythmus"]
-            },
-            {
-              name: "Culture & Tradition",
-              description: "Cultural heritage and traditions",
-              relevance: "high", 
-              keywords: ["kultur", "tradition", "geschichte"]
+              keywords: ["language", "learning", "practice"]
             }
           ]
         }
