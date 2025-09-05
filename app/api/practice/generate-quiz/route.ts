@@ -66,7 +66,6 @@ export async function POST(request: NextRequest) {
         german: baseForm,
         baseForm: baseForm,
         type: type,
-        context: context || `The word "${baseForm}" is a ${type.toLowerCase()}.`
       },
       options: shuffledOptions,
     };
