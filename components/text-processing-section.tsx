@@ -124,12 +124,12 @@ export default function TextProcessingSection() {
 
       // Step 7: Complete
       updateProcessingStep(6)
-      setResult(processedResult)
+      setResult(processedResult.result)
       updateProcessingStep(6, true)
 
       // Show animation for new words
-      if (processedResult.extractedWords.verbs.some((verb: any) => verb.isNew)) {
-        const newVerb = processedResult.extractedWords.verbs.find((verb: any) => verb.isNew)
+      if (processedResult.result?.extractedWords?.verbs?.some((verb: any) => verb.isNew)) {
+        const newVerb = processedResult.result.extractedWords.verbs.find((verb: any) => verb.isNew)
         if (newVerb) {
           setNewWord(newVerb.baseForm)
           setShowNewWordAnimation(true)
@@ -348,7 +348,7 @@ export default function TextProcessingSection() {
             <CardHeader className="bg-teal-50">
               <CardTitle className="text-teal-700">Processing Results</CardTitle>
               <CardDescription>
-                Analysis of "{title}" - {result.stats.totalWords} words
+              Analysis of "{title}" - {result.stats?.totalWords || 0} words
               </CardDescription>
             </CardHeader>
             <CardContent className="pt-6">
