@@ -52,16 +52,7 @@ jobs:
         docker tag $TAG ${{ secrets.DOCKERHUB_USERNAME }}/languagesea:latest
         docker push ${{ secrets.DOCKERHUB_USERNAME }}/languagesea:latest
     
-    - name: Create Git tag
-      run: |
-        git config --local user.email "action@github.com"
-        git config --local user.name "GitHub Action"
-        git tag ${{ steps.version.outputs.version }}
-        git push origin ${{ steps.version.outputs.version }}
-    
-    - name: Deploy to Digital Ocean
-      uses: appleboy/ssh-action@v1.0.0
-      with:
+
         host: ${{ secrets.DO_HOST }}
         username: ${{ secrets.DO_USERNAME }}
         key: ${{ secrets.DO_SSH_KEY }}
