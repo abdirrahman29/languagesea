@@ -1,8 +1,23 @@
-// Fixed app/api/practice/get-available-options/route.ts
+// Enhanced app/api/practice/get-available-options/route.ts
 import { NextRequest, NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { prisma } from '@/lib/db'
+
+interface ThemeInfo {
+  name: string
+  id?: string
+  wordCount: number
+  levels: string[]
+  description?: string
+  categoryBreakdown: Record<string, Record<string, number>> // category -> level -> count
+}
+
+interface CategoryStats {
+  totalWords: number
+  levelDistribution: Record<string, number>
+  themeBreakdown?: Record<string, Record<string, number>> // theme -> level -> count
+}
 
 export async function GET(request: NextRequest) {
   try {
@@ -14,14 +29,15 @@ export async function GET(request: NextRequest) {
     const { searchParams } = new URL(request.url)
     const source = searchParams.get('source') // 'themes' or 'saved-texts'
     const categories = searchParams.get('categories')?.split(',') || []
+    const selectedLevel = searchParams.get('level') // Optional: specific level filter
 
-    console.log(`Getting available options for source: ${source}, categories: ${categories.join(',')}`)
+    console.log(`Getting available options for source: ${source}, categories: ${categories.join(',')}, level: ${selectedLevel}`)
 
     let availableLevels: string[] = []
-    let availableThemes: Array<{ name: string; wordCount: number; levels: string[] }> = []
+    let availableThemes: ThemeInfo[] = []
 
     if (source === 'themes') {
-      // FIXED: Query actual word tables instead of just ThemeCategoryWord
+      // Get themes with detailed category breakdowns
       const themesWithWords = await prisma.themeCategory.findMany({
         include: {
           words: {
@@ -29,17 +45,8 @@ export async function GET(request: NextRequest) {
               type: { in: categories }
             } : undefined,
             select: {
-              level: true,
-              type: true
-            }
-          },
-          _count: {
-            select: {
-              words: {
-                where: categories.length > 0 ? {
-                  type: { in: categories }
-                } : undefined
-              }
+              type: true,
+              level: true
             }
           }
         },
@@ -52,24 +59,42 @@ export async function GET(request: NextRequest) {
         }
       })
 
-      // Extract unique levels across all themes
       const levelSet = new Set<string>()
       
       availableThemes = themesWithWords
-        .filter(theme => theme._count.words > 0)
         .map(theme => {
+          // Build category breakdown: category -> level -> count
+          const categoryBreakdown: Record<string, Record<string, number>> = {}
+          
+          categories.forEach(category => {
+            categoryBreakdown[category] = {}
+            
+            const categoryWords = theme.words.filter(w => w.type === category)
+            categoryWords.forEach(word => {
+              const level = word.level
+              if (level) {
+                levelSet.add(level)
+                categoryBreakdown[category][level] = (categoryBreakdown[category][level] || 0) + 1
+              }
+            })
+          })
+
+          // Get all levels available for this theme
           const themeLevels = [...new Set(theme.words.map(w => w.level).filter(Boolean))]
           themeLevels.forEach(level => levelSet.add(level))
-          
+
           return {
             name: theme.name,
-            wordCount: theme._count.words,
+            id: theme.id,
+            wordCount: theme.words.length,
             levels: themeLevels,
-            description: theme.description || undefined
+            description: theme.description || undefined,
+            categoryBreakdown
           }
         })
+        .filter(theme => theme.wordCount > 0)
 
-      // FIXED: Also get levels directly from word tables
+      // Also get levels from actual word tables for comprehensive coverage
       const additionalLevels = await getAvailableLevelsFromWordTables(categories)
       additionalLevels.forEach(level => levelSet.add(level))
 
@@ -79,7 +104,7 @@ export async function GET(request: NextRequest) {
       })
 
     } else if (source === 'saved-texts') {
-      // Get levels and themes from user's saved texts and extracted words
+      // Get saved texts with detailed category breakdowns
       const savedTextsWithWords = await prisma.savedText.findMany({
         where: {
           userId: session.user.id
@@ -90,17 +115,8 @@ export async function GET(request: NextRequest) {
               type: { in: categories }
             } : undefined,
             select: {
-              level: true,
-              type: true
-            }
-          },
-          _count: {
-            select: {
-              extractedWords: {
-                where: categories.length > 0 ? {
-                  type: { in: categories }
-                } : undefined
-              }
+              type: true,
+              level: true
             }
           }
         }
@@ -109,18 +125,36 @@ export async function GET(request: NextRequest) {
       const levelSet = new Set<string>()
       
       availableThemes = savedTextsWithWords
-        .filter(text => text._count.extractedWords > 0)
         .map(text => {
+          // Build category breakdown: category -> level -> count
+          const categoryBreakdown: Record<string, Record<string, number>> = {}
+          
+          categories.forEach(category => {
+            categoryBreakdown[category] = {}
+            
+            const categoryWords = text.extractedWords.filter(w => w.type === category)
+            categoryWords.forEach(word => {
+              const level = word.level
+              if (level) {
+                levelSet.add(level)
+                categoryBreakdown[category][level] = (categoryBreakdown[category][level] || 0) + 1
+              }
+            })
+          })
+
+          // Get all levels available for this text
           const textLevels = [...new Set(text.extractedWords.map(w => w.level).filter(Boolean))]
           textLevels.forEach(level => levelSet.add(level))
-          
+
           return {
             name: text.title,
-            wordCount: text._count.extractedWords,
+            id: text.id.toString(),
+            wordCount: text.extractedWords.length,
             levels: textLevels,
-            id: text.id.toString()
+            categoryBreakdown
           }
         })
+        .filter(text => text.wordCount > 0)
 
       availableLevels = Array.from(levelSet).sort((a, b) => {
         const levelOrder = ['A1', 'A2', 'B1', 'B2', 'C1', 'C2']
@@ -128,7 +162,7 @@ export async function GET(request: NextRequest) {
       })
     }
 
-    // Get category-specific statistics for better filtering
+    // Get general category statistics (for fallback purposes)
     const categoryStats = await getCategoryStats(session.user.id, source, categories)
 
     console.log(`Found ${availableLevels.length} levels and ${availableThemes.length} themes/texts`)
@@ -139,7 +173,8 @@ export async function GET(request: NextRequest) {
       availableThemes,
       categoryStats,
       source,
-      selectedCategories: categories
+      selectedCategories: categories,
+      selectedLevel
     })
 
   } catch (error) {
@@ -151,7 +186,6 @@ export async function GET(request: NextRequest) {
   }
 }
 
-// FIXED: New function to get levels directly from word tables
 async function getAvailableLevelsFromWordTables(categories: string[]) {
   const levels = new Set<string>()
 
@@ -198,20 +232,19 @@ async function getAvailableLevelsFromWordTables(categories: string[]) {
   return Array.from(levels)
 }
 
-// FIXED: Helper function to get category-specific statistics from actual word tables
 async function getCategoryStats(userId: string, source: string, categories: string[]) {
-  const stats: Record<string, { totalWords: number; levelDistribution: Record<string, number> }> = {}
+  const stats: Record<string, CategoryStats> = {}
 
   for (const category of categories) {
     try {
       if (source === 'themes') {
-        // First try ThemeCategoryWord
+        // Get from ThemeCategoryWord table
         const themeWords = await prisma.themeCategoryWord.findMany({
           where: { type: category },
-          select: { level: true }
+          select: { level: true, themeCategory: { select: { name: true } } }
         })
 
-        // FIXED: Also get from actual word tables
+        // Also get from actual word tables for comprehensive coverage
         let actualWords: Array<{ level: string }> = []
         
         switch (category) {
@@ -257,7 +290,7 @@ async function getCategoryStats(userId: string, source: string, categories: stri
             type: category,
             savedText: { userId }
           },
-          select: { level: true }
+          select: { level: true, savedText: { select: { title: true } } }
         })
 
         const levelDist = words.reduce((acc, word) => {

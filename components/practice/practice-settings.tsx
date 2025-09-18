@@ -92,12 +92,14 @@ interface DynamicOptions {
     levels: string[];
     id?: string;
     description?: string;
+    categoryBreakdown: Record<string, Record<string, number>>; // category -> level -> count
   }>
   categoryStats: Record<string, { 
     totalWords: number; 
     levelDistribution: Record<string, number> 
   }>
 }
+
 
 export interface PracticeConfiguration {
   // Step 1: Categories
@@ -206,7 +208,28 @@ export default function EnhancedPracticeSettings({
       theme.levels.includes(config.level)
     )
   }
-
+  const getCategoryCountForTheme = (themeName: string, categoryId: string, level: string): number => {
+    const theme = dynamicOptions.availableThemes.find(t => t.name === themeName)
+    if (!theme || !theme.categoryBreakdown) return 0
+    
+    const categoryBreakdown = theme.categoryBreakdown[categoryId]
+    if (!categoryBreakdown) return 0
+    
+    return categoryBreakdown[level] || 0
+  }
+  
+  // Get accurate word count for a specific saved text/category/level combination  
+  const getCategoryCountForSavedText = (textId: string, categoryId: string, level: string): number => {
+    const text = dynamicOptions.availableThemes.find(t => t.id === textId)
+    if (!text || !text.categoryBreakdown) return 0
+    
+    const categoryBreakdown = text.categoryBreakdown[categoryId]
+    if (!categoryBreakdown) return 0
+    
+    return categoryBreakdown[level] || 0
+  }
+  
+  
   // Step navigation
   const totalSteps = 7
   const canProceed = () => {
@@ -248,14 +271,20 @@ export default function EnhancedPracticeSettings({
       )
     })
   }
-
   const handleWordCountChange = (category: string, count: number) => {
-    // Get available word count for this category
-    const categoryStats = dynamicOptions.categoryStats[category]
-    const availableWords = categoryStats?.levelDistribution[config.level] || 0
-    const maxWords = Math.min(availableWords, 20) // Cap at 20 max
+    // Get accurate available word count for this category/theme/level combination
+    let maxWords = 0
     
-    // Ensure count is within valid range
+    if (config.practiceSource === 'themes' && config.selectedTheme) {
+      maxWords = getCategoryCountForTheme(config.selectedTheme, category, config.level)
+    } else if (config.practiceSource === 'saved-texts' && config.selectedSavedTexts?.length) {
+      // For multiple saved texts, sum up the available words
+      maxWords = config.selectedSavedTexts.reduce((sum, textId) => {
+        return sum + getCategoryCountForSavedText(textId, category, config.level)
+      }, 0)
+    }
+    
+    // Ensure count is within valid range (minimum 1, maximum available)
     const validCount = Math.max(1, Math.min(maxWords, count))
     
     setConfig({
@@ -266,6 +295,7 @@ export default function EnhancedPracticeSettings({
       }
     })
   }
+  
 
   const handleTenseToggle = (tenseId: string) => {
     const newTenses = config.tenseFocus.includes(tenseId)
@@ -437,97 +467,175 @@ export default function EnhancedPracticeSettings({
               </div>
 
               {/* Theme/Text Selection - Filtered by level */}
-              {config.practiceSource === 'themes' ? (
-                <div>
-                  <h3 className="font-semibold mb-3">
-                    Select Theme (Level {config.level})
-                  </h3>
-                  {isLoadingOptions ? (
-                    <div className="p-4 border border-gray-300 rounded-lg text-center text-gray-500">
-                      Loading themes...
+              // 5. Update the theme selection section in Step 2 (around line 340)
+{config.practiceSource === 'themes' ? (
+  <div>
+    <h3 className="font-semibold mb-3">
+      Select Theme (Level {config.level})
+    </h3>
+    {isLoadingOptions ? (
+      <div className="p-4 border border-gray-300 rounded-lg text-center text-gray-500">
+        Loading themes...
+      </div>
+    ) : (
+      <div>
+        {getFilteredThemes().length === 0 ? (
+          <div className="p-4 border-2 border-dashed border-yellow-300 bg-yellow-50 rounded-lg text-center">
+            <p className="text-yellow-800 text-sm">
+              No themes available for level {config.level} with selected categories.
+              <br />Try selecting a different level or different categories.
+            </p>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {getFilteredThemes().map((theme) => (
+              <div
+                key={theme.name}
+                className={cn(
+                  "p-4 border-2 rounded-lg cursor-pointer transition-all",
+                  config.selectedTheme === theme.name
+                    ? "border-blue-500 bg-blue-50 text-blue-900"
+                    : "border-gray-200 hover:border-gray-300 hover:bg-gray-50"
+                )}
+                onClick={() => setConfig({...config, selectedTheme: theme.name})}
+              >
+                <div className="flex items-center justify-between">
+                  <div className="flex-1">
+                    <h4 className="font-semibold">{theme.name}</h4>
+                    <div className="text-sm text-gray-600 mt-1">
+                      Total words: {theme.wordCount} • Levels: {theme.levels.join(', ')}
                     </div>
-                  ) : (
-                    <div>
-                      {getFilteredThemes().length === 0 ? (
-                        <div className="p-4 border-2 border-dashed border-yellow-300 bg-yellow-50 rounded-lg text-center">
-                          <p className="text-yellow-800 text-sm">
-                            No themes available for level {config.level} with selected categories.
-                            <br />Try selecting a different level or different categories.
-                          </p>
-                        </div>
-                      ) : (
-                        <select
-                          value={config.selectedTheme || ''}
-                          onChange={(e) => setConfig({...config, selectedTheme: e.target.value})}
-                          className="w-full p-3 border border-gray-300 rounded-lg"
-                        >
-                          <option value="">Choose a theme...</option>
-                          {getFilteredThemes().map((theme) => (
-                            <option key={theme.name} value={theme.name}>
-                              {theme.name} ({theme.wordCount} words, levels: {theme.levels.join(', ')})
-                            </option>
-                          ))}
-                        </select>
-                      )}
-                    </div>
+                    
+                    {/* Enhanced: Show accurate breakdown by selected categories */}
+                    {config.selectedCategories.length > 0 && (
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        {config.selectedCategories.map(categoryId => {
+                          const availableInTheme = getCategoryCountForTheme(theme.name, categoryId, config.level)
+                          const categoryName = WORD_CATEGORIES.find(cat => cat.id === categoryId)?.name
+                          
+                          return (
+                            <span
+                              key={categoryId}
+                              className={cn(
+                                "px-2 py-1 rounded text-xs font-medium",
+                                availableInTheme > 0
+                                  ? "bg-green-100 text-green-800"
+                                  : "bg-red-100 text-red-600"
+                              )}
+                            >
+                              {categoryName}: {availableInTheme}
+                            </span>
+                          )
+                        })}
+                      </div>
+                    )}
+                    
+                    {theme.description && (
+                      <div className="text-xs text-gray-500 mt-1">
+                        {theme.description}
+                      </div>
+                    )}
+                  </div>
+                  
+                  {config.selectedTheme === theme.name && (
+                    <CheckCircle2 size={20} className="text-blue-600 ml-2" />
                   )}
                 </div>
-              ) : (
-                <div>
-                  <h3 className="font-semibold mb-3">
-                    Select Saved Texts (Level {config.level})
-                  </h3>
-                  {isLoadingOptions ? (
-                    <div className="p-4 border border-gray-300 rounded-lg text-center text-gray-500">
-                      Loading saved texts...
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    )}
+  </div>
+) : (
+  // Similar update for saved texts section...
+  <div>
+    <h3 className="font-semibold mb-3">
+      Select Saved Texts (Level {config.level})
+    </h3>
+    {isLoadingOptions ? (
+      <div className="p-4 border border-gray-300 rounded-lg text-center text-gray-500">
+        Loading saved texts...
+      </div>
+    ) : (
+      <div className="max-h-48 overflow-y-auto border border-gray-300 rounded-lg">
+        {getFilteredThemes().length === 0 ? (
+          <div className="p-4 text-center text-yellow-600 bg-yellow-50">
+            <div>No saved texts available for level {config.level} with selected categories.</div>
+            <div className="text-xs mt-1">Try a different level or process more texts.</div>
+          </div>
+        ) : (
+          <>
+            <div className="p-2 text-xs text-gray-600 bg-gray-50 border-b">
+              Found {getFilteredThemes().length} texts with {config.level} level words
+            </div>
+            {getFilteredThemes().map((text) => (
+              <label key={text.id || text.name} className="block hover:bg-gray-50 cursor-pointer border-b border-gray-100 last:border-b-0">
+                <div className="flex items-start gap-3 p-3">
+                  <input
+                    type="checkbox"
+                    checked={config.selectedSavedTexts?.includes(text.id || text.name) || false}
+                    onChange={(e) => {
+                      const currentTexts = config.selectedSavedTexts || []
+                      const textId = text.id || text.name
+                      const newTexts = e.target.checked
+                        ? [...currentTexts, textId]
+                        : currentTexts.filter(id => id !== textId)
+                      setConfig({...config, selectedSavedTexts: newTexts})
+                    }}
+                    className="rounded border-gray-300 text-blue-600 focus:ring-blue-500 mt-1"
+                  />
+                  <div className="flex-1">
+                    <div className="font-medium text-sm">{text.name}</div>
+                    <div className="text-xs text-gray-500">
+                      Total: {text.wordCount} words • Levels: {text.levels.join(', ')}
                     </div>
-                  ) : (
-                    <div className="max-h-48 overflow-y-auto border border-gray-300 rounded-lg">
-                      {getFilteredThemes().length === 0 ? (
-                        <div className="p-4 text-center text-yellow-600 bg-yellow-50">
-                          <div>No saved texts available for level {config.level} with selected categories.</div>
-                          <div className="text-xs mt-1">Try a different level or process more texts.</div>
-                        </div>
-                      ) : (
-                        <>
-                          <div className="p-2 text-xs text-gray-600 bg-gray-50 border-b">
-                            Found {getFilteredThemes().length} texts with {config.level} level words
-                          </div>
-                          {getFilteredThemes().map((text) => (
-                            <label key={text.id || text.name} className="flex items-center gap-3 p-3 hover:bg-gray-50 cursor-pointer border-b border-gray-100 last:border-b-0">
-                              <input
-                                type="checkbox"
-                                checked={config.selectedSavedTexts?.includes(text.id || text.name) || false}
-                                onChange={(e) => {
-                                  const currentTexts = config.selectedSavedTexts || []
-                                  const textId = text.id || text.name
-                                  const newTexts = e.target.checked
-                                    ? [...currentTexts, textId]
-                                    : currentTexts.filter(id => id !== textId)
-                                  setConfig({...config, selectedSavedTexts: newTexts})
-                                }}
-                                className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-                              />
-                              <div className="flex-1">
-                                <div className="font-medium text-sm">{text.name}</div>
-                                <div className="text-xs text-gray-500">
-                                  {text.wordCount} words • Levels: {text.levels.join(', ')}
-                                  {text.description && ` • ${text.description}`}
-                                </div>
-                              </div>
-                            </label>
-                          ))}
-                        </>
-                      )}
-                    </div>
-                  )}
+                    
+                    {/* Enhanced: Show accurate breakdown by selected categories for saved texts */}
+                    {config.selectedCategories.length > 0 && (
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        {config.selectedCategories.map(categoryId => {
+                          const availableInText = getCategoryCountForSavedText(text.id || text.name, categoryId, config.level)
+                          const categoryName = WORD_CATEGORIES.find(cat => cat.id === categoryId)?.name
+                          
+                          return (
+                            <span
+                              key={categoryId}
+                              className={cn(
+                                "px-2 py-1 rounded text-xs font-medium",
+                                availableInText > 0
+                                  ? "bg-green-100 text-green-800"
+                                  : "bg-red-100 text-red-600"
+                              )}
+                            >
+                              {categoryName}: {availableInText}
+                            </span>
+                          )
+                        })}
+                      </div>
+                    )}
+                    
+                    {text.description && (
+                      <div className="text-xs text-gray-500 mt-1">
+                        {text.description}
+                      </div>
+                    )}
+                  </div>
                 </div>
-              )}
+              </label>
+            ))}
+          </>
+        )}
+      </div>
+    )}
+  </div>
+)}
             </CardContent>
           </Card>
         )
 
-      // Replace lines 544-586 in practice-settings.tsx case 3:
+// Replace lines 544-586 in practice-settings.tsx case 3:
 case 3:
   return (
     <Card>
@@ -538,6 +646,16 @@ case 3:
         </CardTitle>
         <CardDescription>
           Set how many words you want to practice for each selected category.
+          {config.practiceSource === 'themes' && config.selectedTheme && (
+            <span className="block mt-1 text-sm text-blue-600">
+              Based on theme: "{config.selectedTheme}" at level {config.level}
+            </span>
+          )}
+          {config.practiceSource === 'saved-texts' && config.selectedSavedTexts?.length && (
+            <span className="block mt-1 text-sm text-blue-600">
+              Based on {config.selectedSavedTexts.length} selected text(s) at level {config.level}
+            </span>
+          )}
         </CardDescription>
       </CardHeader>
       <CardContent>
@@ -545,11 +663,17 @@ case 3:
           {config.selectedCategories.map(categoryId => {
             const category = WORD_CATEGORIES.find(cat => cat.id === categoryId)
             
-            // Get available word count for this category
-            const categoryStats = dynamicOptions.categoryStats[categoryId]
-            const availableWords = categoryStats?.levelDistribution[config.level] || 0
-            const maxWords = Math.min(availableWords, 20) // Cap at 20 max
-            const currentCount = config.wordCounts[categoryId] || Math.min(5, maxWords)
+            // Get accurate available word count for this specific selection
+            let availableWords = 0
+            if (config.practiceSource === 'themes' && config.selectedTheme) {
+              availableWords = getCategoryCountForTheme(config.selectedTheme, categoryId, config.level)
+            } else if (config.practiceSource === 'saved-texts' && config.selectedSavedTexts?.length) {
+              availableWords = config.selectedSavedTexts.reduce((sum, textId) => {
+                return sum + getCategoryCountForSavedText(textId, categoryId, config.level)
+              }, 0)
+            }
+            
+            const currentCount = config.wordCounts[categoryId] || Math.min(5, availableWords)
             
             return (
               <div key={categoryId} className="flex items-center justify-between p-4 border border-gray-200 rounded-lg">
@@ -558,72 +682,99 @@ case 3:
                   <div>
                     <div className="font-semibold">{category?.name}</div>
                     <div className="text-sm text-gray-500">{category?.description}</div>
-                    {/* NEW: Show available word count */}
-                    <div className="text-xs text-blue-600 mt-1">
+                    <div className={cn(
+                      "text-xs mt-1 font-medium",
+                      availableWords > 0 ? "text-blue-600" : "text-red-600"
+                    )}>
                       {availableWords > 0 
-                        ? `${availableWords} available in ${config.level}${config.practiceSource === 'themes' && config.selectedTheme ? ` (${config.selectedTheme})` : ''}`
-                        : 'No words available for this level'
+                        ? `${availableWords} available in ${config.level}`
+                        : `No ${category?.name.toLowerCase()} available for ${config.level}`
                       }
+                      {config.practiceSource === 'themes' && config.selectedTheme && (
+                        <span className="text-gray-500"> in "{config.selectedTheme}"</span>
+                      )}
+                      {config.practiceSource === 'saved-texts' && config.selectedSavedTexts?.length && (
+                        <span className="text-gray-500"> in selected texts</span>
+                      )}
                     </div>
                   </div>
                 </div>
                 <div className="flex items-center gap-2">
                   <button
                     onClick={() => handleWordCountChange(categoryId, Math.max(1, currentCount - 1))}
-                    disabled={currentCount <= 1}
+                    disabled={currentCount <= 1 || availableWords === 0}
                     className="w-8 h-8 flex items-center justify-center border border-gray-300 rounded hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     -
                   </button>
                   <span className="w-12 text-center font-semibold">
-                    {currentCount}
+                    {availableWords > 0 ? currentCount : 0}
                   </span>
                   <button
-                    onClick={() => handleWordCountChange(categoryId, Math.min(maxWords, currentCount + 1))}
-                    disabled={currentCount >= maxWords || availableWords === 0}
+                    onClick={() => handleWordCountChange(categoryId, Math.min(availableWords, currentCount + 1))}
+                    disabled={currentCount >= availableWords || availableWords === 0}
                     className="w-8 h-8 flex items-center justify-center border border-gray-300 rounded hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     +
                   </button>
-                  {/* NEW: Max button to set to maximum available */}
-                  {maxWords > currentCount && (
+                  {availableWords > currentCount && availableWords > 0 && (
                     <button
-                      onClick={() => handleWordCountChange(categoryId, maxWords)}
+                      onClick={() => handleWordCountChange(categoryId, availableWords)}
                       className="px-2 py-1 text-xs bg-blue-100 text-blue-800 rounded hover:bg-blue-200"
                     >
-                      Max ({maxWords})
+                      Max ({availableWords})
                     </button>
                   )}
                 </div>
               </div>
             )
           })}
+          
+          {/* Summary section */}
           <div className="p-3 bg-blue-50 border border-blue-200 rounded-lg">
-            <p className="text-blue-800 text-sm">
+            <p className="text-blue-800 text-sm font-medium">
               Total words: {Object.values(config.wordCounts).reduce((sum, count) => sum + (count || 0), 0)}
             </p>
-            {/* NEW: Show breakdown by category with available counts */}
             <div className="text-xs text-blue-700 mt-2 space-y-1">
               {config.selectedCategories.map(categoryId => {
                 const category = WORD_CATEGORIES.find(cat => cat.id === categoryId)
-                const categoryStats = dynamicOptions.categoryStats[categoryId]
-                const availableWords = categoryStats?.levelDistribution[config.level] || 0
+                let availableWords = 0
+                
+                if (config.practiceSource === 'themes' && config.selectedTheme) {
+                  availableWords = getCategoryCountForTheme(config.selectedTheme, categoryId, config.level)
+                } else if (config.practiceSource === 'saved-texts' && config.selectedSavedTexts?.length) {
+                  availableWords = config.selectedSavedTexts.reduce((sum, textId) => {
+                    return sum + getCategoryCountForSavedText(textId, categoryId, config.level)
+                  }, 0)
+                }
+                
                 const selectedCount = config.wordCounts[categoryId] || 0
                 
                 return (
                   <div key={categoryId} className="flex justify-between">
                     <span>{category?.name}:</span>
-                    <span>{selectedCount}/{availableWords} available</span>
+                    <span className={selectedCount > availableWords ? "text-red-600 font-medium" : ""}>
+                      {selectedCount}/{availableWords} available
+                    </span>
                   </div>
                 )
               })}
             </div>
+            {config.practiceSource === 'themes' && config.selectedTheme && (
+              <div className="text-xs text-blue-600 mt-2 pt-2 border-t border-blue-200">
+                Source: "{config.selectedTheme}" theme at {config.level} level
+              </div>
+            )}
+            {config.practiceSource === 'saved-texts' && config.selectedSavedTexts?.length && (
+              <div className="text-xs text-blue-600 mt-2 pt-2 border-t border-blue-200">
+                Source: {config.selectedSavedTexts.length} saved text(s) at {config.level} level
+              </div>
+            )}
           </div>
         </div>
       </CardContent>
     </Card>
   )
-
       case 4:
         return (
           <Card>
