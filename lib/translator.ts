@@ -1,11 +1,15 @@
 // Updated translator.ts - Dynamic language support
 import OpenAI from 'openai'
+import { GoogleGenerativeAI } from '@google/generative-ai'
 
 // Initialize Groq API client
 const groq = new OpenAI({
   baseURL: 'https://api.groq.com/openai/v1',
   apiKey: process.env.GROQ_API_KEY!
 })
+// Initialize Gemini Flash 2.5 (for practice content generation)
+const genai = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!)
+const geminiModel = genai.getGenerativeModel({ model: 'gemini-2.0-flash-exp' })
 
 // Current supported models
 const GROQ_MODELS = {
@@ -91,7 +95,217 @@ const LANGUAGE_CONFIGS = {
     grammarFeatures: ['conjugations', 'gender']
   }
 }
+function generatePracticePrompt(
+  targetWords: any[],
+  config: {
+    selectedCategories: string[]
+    contentStyle: string
+    tenseFocus: string[]
+    level: string
+    theme?: string
+    length: number
+    difficulty: 'easy' | 'medium' | 'hard'
+  },
+  languageSettings: any
+): string {
+  const { languageCode, learningLanguage, nativeLanguage } = languageSettings
+  const languageConfig = LANGUAGE_CONFIGS[languageCode as keyof typeof LANGUAGE_CONFIGS] || LANGUAGE_CONFIGS.de
 
+  // Organize words by category
+  const wordsByCategory = targetWords.reduce((acc, word) => {
+    if (!acc[word.type]) acc[word.type] = []
+    acc[word.type].push(word)
+    return acc
+  }, {} as Record<string, any[]>)
+
+  // Generate category-specific instructions
+  const categoryInstructions = config.selectedCategories.map(category => {
+    const words = wordsByCategory[category] || []
+    const wordList = words.map(w => w.baseForm).join(', ')
+    
+    switch (category) {
+      case 'VERB':
+        return `VERBS (${words.length} words): ${wordList}
+- Use these verbs in ${config.tenseFocus.join(', ')} tense(s)
+- Show different conjugations naturally in context
+- Include both regular and irregular conjugation patterns when applicable
+- Make the verbal actions central to the story/dialogue progression`
+
+      case 'NOUN':
+        return `NOUNS (${words.length} words): ${wordList}
+- Use these nouns with appropriate articles (der/die/das)
+- Show different cases (Nominativ, Akkusativ, Dativ, Genitiv) naturally
+- Include both singular and plural forms where contextually appropriate
+- Make these nouns key elements in the content (not just mentions)`
+
+      case 'ADJ':
+        return `ADJECTIVES (${words.length} words): ${wordList}
+- Use these adjectives both attributively (before nouns) and predicatively (after sein/werden)
+- Show proper adjective declensions based on case, gender, and definiteness
+- Include comparative and superlative forms where natural
+- Use them to create vivid, descriptive scenes`
+
+      case 'ADVERB':
+        return `ADVERBS (${words.length} words): ${wordList}
+- Use these adverbs to modify verbs, adjectives, and other adverbs
+- Place them in various positions in sentences for natural flow
+- Include temporal, modal, and local adverbs appropriately
+- Use them to add depth and specificity to actions and descriptions`
+
+      default:
+        return `${category} (${words.length} words): ${wordList}`
+    }
+  }).join('\n\n')
+
+  // Generate tense-specific instructions
+  const tenseInstructions = config.tenseFocus.map(tense => {
+    switch (tense) {
+      case 'present':
+        return `Present Tense (Präsens): Use for current actions, general truths, and ongoing states. Show different verb conjugations for different persons.`
+      case 'past':
+        return `Simple Past (Präteritum): Use for completed past actions, especially in narratives. Focus on strong and weak verb patterns.`
+      case 'perfect':
+        return `Present Perfect (Perfekt): Use with haben/sein + past participle for actions with present relevance. Show correct auxiliary verb choice.`
+      case 'pluperfect':
+        return `Past Perfect (Plusquamperfekt): Use for actions completed before other past actions. Demonstrate sequence of events clearly.`
+      case 'future':
+        return `Future (Futur I): Use werden + infinitive for future actions and intentions. Show different degrees of certainty.`
+      case 'mixed':
+        return `Mixed Tenses: Naturally combine multiple tenses to show time relationships and narrative flow.`
+      default:
+        return `Focus on ${tense} tense usage throughout the content.`
+    }
+  }).join(' ')
+
+  // Generate content-specific instructions
+  let contentInstructions = ''
+  switch (config.contentStyle) {
+    case 'story':
+      contentInstructions = `Create an engaging SHORT STORY with:
+- Clear beginning, middle, and end with character development
+- Rich descriptive language using the target adjectives and adverbs
+- Action-driven plot that naturally incorporates the target verbs
+- Realistic dialogue that feels natural and contextually appropriate
+- Cultural elements that enhance German language learning
+- A satisfying resolution that ties together all story elements
+- Varied sentence structures (simple, compound, complex) appropriate for ${config.level} level`
+      break
+
+    case 'dialogue-2':
+      contentInstructions = `Create a NATURAL CONVERSATION between 2 people with:
+- Authentic dialogue that people actually use in real German conversations
+- Clear character voices and motivations for speaking
+- Natural back-and-forth flow with interruptions, questions, and responses
+- Contextual situation that motivates the use of target vocabulary
+- Emotional undertones and subtext where appropriate
+- Realistic conversational fillers and expressions
+- A clear purpose or goal that drives the conversation forward`
+      break
+
+    case 'dialogue-3':
+      contentInstructions = `Create a DYNAMIC GROUP CONVERSATION with 3 people including:
+- Distinct personality and speaking style for each character
+- Natural group dynamics with people agreeing, disagreeing, and building on each other's ideas
+- Overlapping conversations and realistic group interaction patterns
+- Clear context that necessitates all three people's participation
+- Varied speech patterns and vocabulary levels among characters
+        - Natural conversation flow with realistic topic transitions and conclusions`
+      break
+
+    case 'dialogue-4':
+      contentInstructions = `Create a COMPLEX GROUP CONVERSATION with 4 people featuring:
+- Four distinct characters with unique perspectives and speaking styles
+- Realistic group dynamics including alliances, disagreements, and power shifts
+- Natural conversation patterns where people interrupt, support, and challenge each other
+- Multiple conversation threads that weave together naturally
+- Clear social context that brings these four people together meaningfully
+- Authentic German social interactions and cultural nuances
+- Balanced participation where each character contributes meaningfully`
+      break
+
+    case 'article':
+      contentInstructions = `Create an INFORMATIVE ARTICLE with:
+- Clear, journalistic structure with introduction, body, and conclusion
+- Factual, objective tone appropriate for German news/magazine style
+- Logical flow of information with smooth transitions between paragraphs
+- Technical vocabulary balanced with accessibility for ${config.level} learners
+- Concrete examples and specific details that illustrate main points
+- Authoritative voice that demonstrates expertise on the topic
+- Cultural context relevant to German-speaking countries`
+      break
+
+    default:
+      contentInstructions = `Create engaging ${config.contentStyle} content`
+  }
+
+  // Generate difficulty-specific instructions
+  let difficultyInstructions = ''
+  switch (config.difficulty) {
+    case 'easy':
+      difficultyInstructions = `DIFFICULTY LEVEL: Easy
+- Use simple, clear sentence structures (mostly main clauses)
+- Choose common, high-frequency vocabulary beyond the target words
+- Keep sentences relatively short (10-15 words average)
+- Use straightforward word order and familiar grammatical patterns
+- Include helpful context clues for target word meanings
+- Avoid complex subordinate clauses or advanced grammatical constructions`
+      break
+
+    case 'medium':
+      difficultyInstructions = `DIFFICULTY LEVEL: Medium  
+- Mix simple and compound sentences with some complex structures
+- Include both familiar and moderately challenging vocabulary
+- Vary sentence length (10-20 words average) for natural flow
+- Use standard German word order with some inversions
+- Include some subordinate clauses and conjunctions
+- Balance challenge with comprehensibility for the target level`
+      break
+
+    case 'hard':
+      difficultyInstructions = `DIFFICULTY LEVEL: Hard
+- Use complex sentence structures with multiple clauses
+- Include sophisticated vocabulary and idiomatic expressions
+- Employ varied and advanced grammatical constructions
+- Use complex word order and stylistic inversions
+- Include challenging cultural references and nuanced meanings
+- Push the boundaries of the stated proficiency level appropriately`
+      break
+  }
+
+  // Generate the complete, detailed prompt
+  return `You are an expert German language instructor creating practice content. Generate a ${config.length}-word ${contentInstructions.toLowerCase()} that masterfully incorporates the following target vocabulary while feeling completely natural and engaging.
+
+CRITICAL REQUIREMENTS - EVERY WORD MUST BE USED:
+${categoryInstructions}
+
+GRAMMAR FOCUS:
+${tenseInstructions}
+
+${difficultyInstructions}
+
+QUALITY STANDARDS:
+- Content must feel authentic and natural - not forced or artificial
+- Each target word should appear in meaningful context that clarifies its meaning
+- Use rich, descriptive language that brings the content to life
+- Include cultural elements authentic to German-speaking countries
+- Create emotional engagement through relatable situations and characters
+- Ensure logical flow and coherent narrative/informational structure
+- Target length: approximately ${config.length} words (${config.length * 0.8}-${config.length * 1.2} acceptable range)
+
+LANGUAGE SPECIFICATIONS:
+- Write entirely in German with proper grammar, spelling, and punctuation
+- Use vocabulary appropriate for ${config.level} level learners
+- Include variety in sentence structure and complexity
+- Show natural German speech patterns and cultural expressions
+- Demonstrate proper use of German punctuation and capitalization rules
+
+${config.theme ? `THEME INTEGRATION: Naturally incorporate elements related to "${config.theme}" throughout the content.` : ''}
+
+OUTPUT FORMAT:
+Provide ONLY the German text content - no explanations, translations, or commentary. The content should be publication-ready and engaging for language learners.
+
+Write the content now:`
+}
 // Improved JSON extraction with better error handling
 function extractJsonFromResponse(text: string): string {
   console.log("Raw response length:", text.length)
@@ -164,6 +378,91 @@ export function createTranslator(languageCode: string = 'de', translationCode: s
   const languageConfig = LANGUAGE_CONFIGS[languageCode as keyof typeof LANGUAGE_CONFIGS] || LANGUAGE_CONFIGS.de
   
   return {
+    generatePracticeContent: async (
+      targetWords: any[],
+      config: {
+        selectedCategories: string[]
+        contentStyle: string
+        tenseFocus: string[]
+        level: string
+        theme?: string
+        length: number
+        difficulty: 'easy' | 'medium' | 'hard'
+      },
+      languageSettings: any
+    ) => {
+      try {
+        console.log(`🚀 Generating practice content with Gemini Flash 2.5 for ${languageConfig.name}`)
+        console.log(`📝 Config: ${config.contentStyle}, categories: ${config.selectedCategories.join(',')}, tenses: ${config.tenseFocus.join(',')}`)
+        
+        const prompt = generatePracticePrompt(targetWords, config, languageSettings)
+        console.log(`📄 Generated prompt length: ${prompt.length} characters`)
+        
+        const result = await geminiModel.generateContent(prompt)
+        const generatedContent = result.response.text().trim()
+        
+        if (!generatedContent) {
+          throw new Error("Empty response from Gemini Flash 2.5")
+        }
+        
+        console.log(`✅ Generated content length: ${generatedContent.length} characters`)
+        
+        // Generate translation using Groq (more reliable for translation)
+        console.log(`🔄 Translating content to ${languageSettings.nativeLanguage}...`)
+        const translationPrompt = `Translate this ${languageConfig.name} text to ${languageSettings.nativeLanguage}. Provide only the translation, no explanations:
+
+${generatedContent}`
+
+        const translationCompletion = await groq.chat.completions.create({
+          model: DEFAULT_MODEL,
+          messages: [{ role: "user", content: translationPrompt }],
+          temperature: 0.3,
+          max_tokens: 2000
+        })
+        
+        const translation = translationCompletion.choices[0]?.message?.content?.trim() || `[Translation of the ${languageConfig.name} text]`
+        
+        return {
+          learningText: generatedContent,
+          translationText: translation
+        }
+        
+      } catch (error) {
+        console.error(`❌ Error generating practice content with Gemini Flash 2.5:`, error)
+        
+        // Fallback to Groq for content generation
+        console.log(`🔄 Falling back to Groq for content generation...`)
+        const fallbackPrompt = generatePracticePrompt(targetWords, config, languageSettings)
+        
+        try {
+          const completion = await groq.chat.completions.create({
+            model: DEFAULT_MODEL,
+            messages: [{ role: "user", content: fallbackPrompt }],
+            temperature: 0.7,
+            max_tokens: 4000
+          })
+          
+          const fallbackContent = completion.choices[0]?.message?.content?.trim() || ""
+          const fallbackTranslation = `[Translation of the ${languageConfig.name} practice content]`
+          
+          return {
+            learningText: fallbackContent,
+            translationText: fallbackTranslation
+          }
+        } catch (fallbackError) {
+          console.error(`❌ Fallback generation also failed:`, fallbackError)
+          
+          // Final emergency fallback
+          const wordList = targetWords.map(w => w.baseForm).join(', ')
+          return {
+            learningText: `Ein ${config.contentStyle} über ${config.theme || 'verschiedene Themen'}. Wichtige Wörter: ${wordList}. Dies ist ein Beispieltext für Übungszwecke.`,
+            translationText: `A ${config.contentStyle} about ${config.theme || 'various topics'}. Important words: ${wordList}. This is an example text for practice purposes.`
+          }
+        }
+      }
+    },
+
+
     generateContent: async (prompt: string) => {
       try {
         console.log(`Generating content with Groq for ${languageConfig.name}:`, prompt.substring(0, 100) + "...")

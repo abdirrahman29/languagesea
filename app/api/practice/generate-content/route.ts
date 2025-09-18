@@ -1,10 +1,9 @@
-// Updated app/api/practice/generate-content/route.ts - Dynamic language support
+// Updated app/api/practice/generate-content/route.ts - Enhanced with category-specific word selection and Gemini integration
 import { NextRequest, NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { createTranslator } from '@/lib/translator'
 import { prisma } from '@/lib/db'
-import type { WordTarget } from '@/lib/practice-engine'
 
 // Get user's language settings
 async function getUserLanguageSettings(userId: string) {
@@ -50,6 +49,160 @@ async function getUserLanguageSettings(userId: string) {
   }
 }
 
+// Enhanced word selection with category-specific targeting
+async function selectWordsByCategories(
+  userId: string,
+  config: {
+    selectedCategories: string[]
+    wordCounts: Record<string, number>
+    level: string
+    practiceSource: 'themes' | 'saved-texts'
+    selectedTheme?: string
+    selectedSavedTexts?: string[]
+  }
+) {
+  const selectedWords: any[] = []
+  
+  console.log(`📊 Selecting words by categories:`, config.selectedCategories)
+  console.log(`📊 Word counts:`, config.wordCounts)
+
+  for (const category of config.selectedCategories) {
+    const wordCount = config.wordCounts[category] || 5
+    console.log(`🔍 Selecting ${wordCount} ${category} words...`)
+
+    let categoryWords: any[] = []
+
+    if (config.practiceSource === 'themes' && config.selectedTheme) {
+      // Get words from specific theme
+      const themeCategory = await prisma.themeCategory.findFirst({
+        where: {
+          name: { contains: config.selectedTheme, mode: 'insensitive' }
+        }
+      })
+
+      if (themeCategory) {
+        categoryWords = await prisma.themeCategoryWord.findMany({
+          where: {
+            themeCategoryId: themeCategory.id,
+            type: category,
+            level: { in: getLevelsUpTo(config.level) }
+          },
+          take: wordCount * 3, // Get more for selection
+          orderBy: { text: 'asc' }
+        })
+      }
+    } else if (config.practiceSource === 'saved-texts' && config.selectedSavedTexts) {
+      // Get words from saved texts
+      categoryWords = await prisma.extractedWord.findMany({
+        where: {
+          savedTextId: { in: config.selectedSavedTexts.map(id => parseInt(id)) },
+          type: category,
+          level: { in: getLevelsUpTo(config.level) },
+          savedText: { userId }
+        },
+        take: wordCount * 3,
+        orderBy: { baseForm: 'asc' }
+      })
+    }
+
+    // Get practice history for prioritization
+    const practiceHistory = await prisma.practicedWord.findMany({
+      where: {
+        userId,
+        type: category,
+        baseForm: { in: categoryWords.map(w => 'baseForm' in w ? w.baseForm : w.text) }
+      }
+    })
+
+    const practiceMap = new Map(
+      practiceHistory.map(p => [
+        p.baseForm, 
+        {
+          count: p.timesCorrect + p.timesWrong,
+          lastPracticed: p.lastPracticed,
+          accuracy: p.timesCorrect / (p.timesCorrect + p.timesWrong) || 0
+        }
+      ])
+    )
+
+    // Score and select words
+    const scoredWords = categoryWords.map(word => {
+      const baseForm = 'baseForm' in word ? word.baseForm : word.text
+      const practice = practiceMap.get(baseForm)
+      
+      let priority = 10 // Base priority
+      
+      if (!practice) {
+        priority += 20 // Never practiced
+      } else {
+        const daysSince = practice.lastPracticed 
+          ? (Date.now() - practice.lastPracticed.getTime()) / (1000 * 60 * 60 * 24)
+          : 999
+          
+        if (daysSince < 1) priority -= 15
+        else if (daysSince < 3) priority -= 10
+        else if (daysSince < 7) priority -= 5
+        
+        if (practice.count > 5 && practice.accuracy > 0.8) {
+          priority -= 10 // Well-known words get lower priority
+        }
+        
+        if (practice.count > 0 && practice.accuracy < 0.5) {
+          priority += 10 // Difficult words get higher priority
+        }
+      }
+
+      return {
+        word,
+        practice: practice || { count: 0, lastPracticed: null, accuracy: 0 },
+        priority,
+        baseForm,
+        type: category,
+        translation: word.translation,
+        level: word.level
+      }
+    })
+
+    // Select top words by priority
+    const selectedCategoryWords = scoredWords
+      .sort((a, b) => b.priority - a.priority)
+      .slice(0, wordCount)
+      .map(({ word, practice, baseForm, type, translation, level }) => ({
+        baseForm,
+        type,
+        translation,
+        level,
+        practiceCount: practice.count,
+        lastPracticed: practice.lastPracticed,
+        isKnown: practice.count >= 3 && practice.accuracy > 0.7,
+        familiarity: getFamiliarityLevel(practice.count, practice.accuracy),
+        themes: config.selectedTheme ? [config.selectedTheme] : ['Mixed'],
+        source: config.practiceSource
+      }))
+
+    selectedWords.push(...selectedCategoryWords)
+    console.log(`✅ Selected ${selectedCategoryWords.length} ${category} words`)
+  }
+
+  console.log(`🎯 Total selected words: ${selectedWords.length}`)
+  return selectedWords
+}
+
+// Helper function to get levels up to the target level
+function getLevelsUpTo(targetLevel: string): string[] {
+  const levels = ['A1', 'A2', 'B1', 'B2', 'C1', 'C2']
+  const targetIndex = levels.indexOf(targetLevel)
+  return levels.slice(0, targetIndex + 1)
+}
+
+// Helper function to determine familiarity level
+function getFamiliarityLevel(practiceCount: number, accuracy: number): string {
+  if (practiceCount === 0) return 'unknown'
+  if (practiceCount < 3) return 'learning'
+  if (practiceCount < 6 || accuracy < 0.8) return 'familiar'
+  return 'mastered'
+}
+
 export async function POST(request: NextRequest) {
   try {
     const session = await getServerSession(authOptions)
@@ -62,50 +215,61 @@ export async function POST(request: NextRequest) {
 
     const body = await request.json()
     const { 
-      sessionId, 
-      targetWords, 
-      theme, 
-      style, 
-      userLevel,
-      difficulty,
-      length
+      sessionId,
+      config // New enhanced configuration object
     }: {
       sessionId: string
-      targetWords: WordTarget[]
-      theme: string
-      style: 'conversation' | 'article' | 'story'
-      userLevel: string
-      difficulty: 'easy' | 'medium' | 'hard'
-      length: number
+      config: {
+        selectedCategories: string[]
+        wordCounts: Record<string, number>
+        level: string
+        practiceSource: 'themes' | 'saved-texts'
+        selectedTheme?: string
+        selectedSavedTexts?: string[]
+        contentStyle: string
+        tenseFocus: string[]
+        length: number
+        difficulty: 'easy' | 'medium' | 'hard'
+      }
     } = body
 
+    console.log(`🚀 Generating enhanced practice content with categories: ${config.selectedCategories.join(', ')}`)
+    console.log(`📝 Content style: ${config.contentStyle}, Tenses: ${config.tenseFocus.join(', ')}`)
+
     // Validate input
-    if (!targetWords || !Array.isArray(targetWords) || targetWords.length === 0) {
+    if (!config.selectedCategories || config.selectedCategories.length === 0) {
       return NextResponse.json(
-        { error: 'Target words are required' },
+        { error: 'At least one word category must be selected' },
         { status: 400 }
       )
     }
 
     // Get user's language settings
     const languageSettings = await getUserLanguageSettings(session.user.id)
-    const { languageCode, translationCode, learningLanguage, nativeLanguage } = languageSettings
 
-    console.log(`Generating content for ${learningLanguage} (${languageCode}) with ${targetWords.length} target words`)
+    // Select words based on categories and configuration
+    const targetWords = await selectWordsByCategories(session.user.id, config)
 
-    const translator = createTranslator()
+    if (targetWords.length === 0) {
+      return NextResponse.json(
+        { error: 'No words available for the selected categories and criteria' },
+        { status: 400 }
+      )
+    }
 
-    // Generate content using AI with dynamic language support
-    const generatedContent = await generatePracticeContent({
+    console.log(`📚 Selected ${targetWords.length} words across ${config.selectedCategories.length} categories`)
+
+    // Create enhanced translator with Gemini Flash 2.5 for practice content
+    const translator = createTranslator(languageSettings.languageCode, languageSettings.translationCode)
+
+    // Generate content using the enhanced method with Gemini Flash 2.5
+    const generatedContent = await translator.generatePracticeContent(
       targetWords,
-      theme,
-      style,
-      userLevel,
-      difficulty,
-      length,
-      translator,
+      config,
       languageSettings
-    })
+    )
+
+    console.log(`✅ Content generated successfully with ${generatedContent.learningText.length} characters`)
 
     // Parse the generated content and identify word positions
     const parsedContent = await parseContentWithWordPositions(
@@ -113,25 +277,50 @@ export async function POST(request: NextRequest) {
       targetWords
     )
 
+    // Calculate quality metrics and content level assessment
+    const qualityMetrics = {
+      wordsUsed: parsedContent.words.filter(w => w.isTarget).length,
+      totalTargetWords: targetWords.length,
+      categoryDistribution: config.selectedCategories.reduce((acc, category) => {
+        acc[category] = parsedContent.words.filter(w => w.isTarget && w.type === category).length
+        return acc
+      }, {} as Record<string, number>),
+      averageWordLength: generatedContent.learningText.split(/\s+/).reduce((sum, word) => sum + word.length, 0) / generatedContent.learningText.split(/\s+/).length,
+      sentenceCount: generatedContent.learningText.split(/[.!?]+/).filter(s => s.trim().length > 0).length,
+      estimatedReadingTime: Math.ceil(generatedContent.learningText.split(/\s+/).length / 150) // words per minute
+    }
+
+    // NEW: Calculate overall content level based on vocabulary complexity
+    const contentLevelAssessment = await assessContentLevel(
+      parsedContent.words.filter(w => w.isTarget),
+      generatedContent.learningText,
+      config
+    )
+
+    console.log(`📊 Quality metrics:`, qualityMetrics)
+    console.log(`📈 Content level assessment:`, contentLevelAssessment)
+
     const response = {
       sessionId,
       content: {
-        [languageCode]: generatedContent.learningText, // Dynamic language field
+        [languageSettings.languageCode]: generatedContent.learningText,
         german: generatedContent.learningText, // Keep for backward compatibility
-        [translationCode]: generatedContent.translationText, // Dynamic translation field
+        [languageSettings.translationCode]: generatedContent.translationText,
         english: generatedContent.translationText, // Keep for backward compatibility
         words: parsedContent.words,
         sentences: parsedContent.sentences
       },
       metadata: {
-        wordCount: parsedContent.words.length,
-        targetWordsUsed: parsedContent.words.filter(w => w.isTarget).length,
-        difficultyScore: calculateDifficultyScore(parsedContent.words),
-        estimatedReadingTime: Math.ceil(generatedContent.learningText.split(' ').length / 150),
-        languageCode,
-        translationCode,
-        learningLanguage,
-        nativeLanguage
+        wordsUsed: qualityMetrics.wordsUsed,
+        totalTargetWords: qualityMetrics.totalTargetWords,
+        categoryDistribution: qualityMetrics.categoryDistribution,
+        averageWordLength: qualityMetrics.averageWordLength,
+        sentenceCount: qualityMetrics.sentenceCount,
+        estimatedReadingTime: qualityMetrics.estimatedReadingTime,
+        contentLevelAssessment,
+        config,
+        languageSettings,
+        generationMethod: 'gemini-flash-2.5'
       }
     }
 
@@ -141,7 +330,7 @@ export async function POST(request: NextRequest) {
     })
 
   } catch (error) {
-    console.error('Error generating practice content:', error)
+    console.error('❌ Error generating enhanced practice content:', error)
     return NextResponse.json(
       { error: 'Failed to generate practice content' },
       { status: 500 }
@@ -149,158 +338,161 @@ export async function POST(request: NextRequest) {
   }
 }
 
-// Enhanced content generation with dynamic language support
-async function generatePracticeContent({
-  targetWords,
-  theme,
-  style,
-  userLevel,
-  difficulty,
-  length,
-  translator,
-  languageSettings
-}: {
-  targetWords: WordTarget[]
-  theme: string
-  style: string
-  userLevel: string
-  difficulty: string
-  length: number
-  translator: any
-  languageSettings: any
-}) {
-  const { languageCode, translationCode, learningLanguage, nativeLanguage } = languageSettings
+// NEW: Content level assessment function
+async function assessContentLevel(
+  targetWords: any[],
+  generatedText: string,
+  config: any
+) {
+  // Calculate level distribution of target words
+  const levelCounts = targetWords.reduce((acc, word) => {
+    const level = word.level || 'Unknown'
+    acc[level] = (acc[level] || 0) + 1
+    return acc
+  }, {} as Record<string, number>)
+
+  const totalTargetWords = targetWords.length
+  const levelPercentages = Object.fromEntries(
+    Object.entries(levelCounts).map(([level, count]) => [
+      level,
+      Math.round((count / totalTargetWords) * 100)
+    ])
+  )
+
+  // Calculate text complexity metrics
+  const sentences = generatedText.split(/[.!?]+/).filter(s => s.trim().length > 0)
+  const words = generatedText.split(/\s+/)
   
-  const targetWordsList = targetWords.map(w => w.baseForm).join(', ')
-  const knownWords = targetWords.filter(w => w.isKnown).map(w => w.baseForm).join(', ')
-  
-  let stylePrompt = ''
-  switch (style) {
-    case 'story':
-      stylePrompt = 'Write an engaging short story'
-      break
-    case 'conversation':
-      stylePrompt = 'Write a natural conversation between 2-3 people'
-      break
-    case 'article':
-      stylePrompt = 'Write an informative article'
-      break
+  const textComplexity = {
+    averageSentenceLength: Math.round(words.length / sentences.length),
+    averageWordLength: Math.round(words.reduce((sum, word) => sum + word.length, 0) / words.length),
+    complexSentenceCount: sentences.filter(s => 
+      (s.match(/,/g) || []).length >= 2 || // Multiple clauses
+      s.length > 100 // Long sentences
+    ).length,
+    totalWords: words.length,
+    totalSentences: sentences.length
   }
 
-  let difficultyInstructions = ''
-  switch (difficulty) {
-    case 'easy':
-      difficultyInstructions = 'Use simple sentence structures and common vocabulary'
-      break
-    case 'medium':
-      difficultyInstructions = 'Use moderate complexity with some compound sentences'
-      break
-    case 'hard':
-      difficultyInstructions = 'Use complex sentence structures and varied vocabulary'
-      break
+  // Determine overall content level based on multiple factors
+  let primaryLevel = config.level // Start with user's selected level
+  let actualLevel = 'A1' // Default to A1
+  
+  // Calculate weighted level based on vocabulary distribution
+  const levelWeights = { A1: 1, A2: 2, B1: 3, B2: 4, C1: 5, C2: 6 }
+  let weightedSum = 0
+  let totalWords = 0
+  
+  Object.entries(levelCounts).forEach(([level, count]) => {
+    if (levelWeights[level as keyof typeof levelWeights]) {
+      weightedSum += levelWeights[level as keyof typeof levelWeights] * count
+      totalWords += count
+    }
+  })
+  
+  if (totalWords > 0) {
+    const averageWeight = weightedSum / totalWords
+    const levels = Object.keys(levelWeights)
+    actualLevel = levels[Math.min(Math.floor(averageWeight) - 1, levels.length - 1)] || 'A1'
   }
 
-  const lengthInstructions = `Length: approximately ${length} words`
+  // Adjust level based on text complexity
+  let complexityAdjustment = 0
   
-  // Dynamic prompt based on learning language
-  const prompt = `${stylePrompt} in ${learningLanguage} about "${theme}" for ${userLevel} level learners.
-
-  MANDATORY REQUIREMENTS:
-  - Must include ALL these target words naturally: ${targetWordsList}
-  - ${difficultyInstructions}
-  - ${lengthInstructions}
-  - Make the context clear so word meanings are obvious
-  - The text must be about the theme of "${theme}"
-  - Use these familiar words when possible: ${knownWords}
-  - Write in proper ${learningLanguage} with correct grammar and natural flow
+  // Sentence length adjustment
+  if (textComplexity.averageSentenceLength > 15) complexityAdjustment += 1
+  if (textComplexity.averageSentenceLength > 20) complexityAdjustment += 1
   
-  Additional guidelines:
-  - Create a coherent, engaging narrative
-  - Use target words in contexts that make their meaning clear
-  - Ensure natural ${learningLanguage} grammar and flow
-  - Level-appropriate vocabulary and structures for ${userLevel} learners
-  - Make the content culturally appropriate and interesting
+  // Complex sentence adjustment
+  const complexSentenceRatio = textComplexity.complexSentenceCount / textComplexity.totalSentences
+  if (complexSentenceRatio > 0.3) complexityAdjustment += 1
+  if (complexSentenceRatio > 0.5) complexityAdjustment += 1
   
-  Write ONLY the ${learningLanguage} text, no explanations or formatting.`
+  // Word length adjustment
+  if (textComplexity.averageWordLength > 6) complexityAdjustment += 1
+  
+  // Apply complexity adjustment
+  const levelIndex = Object.keys(levelWeights).indexOf(actualLevel)
+  const adjustedIndex = Math.min(levelIndex + complexityAdjustment, Object.keys(levelWeights).length - 1)
+  const finalLevel = Object.keys(levelWeights)[adjustedIndex]
 
-  try {
-    console.log(`Generating ${learningLanguage} content...`)
-    const learningText = await translator.generateContent(prompt)
-    
-    console.log(`Translating to ${nativeLanguage}...`)
-    const translationText = await translator.translate(learningText, { 
-      from: languageCode, 
-      to: translationCode 
-    })
+  // Determine if content level matches user expectation
+  const levelMismatch = finalLevel !== config.level
+  const levelDifference = levelWeights[finalLevel as keyof typeof levelWeights] - levelWeights[config.level as keyof typeof levelWeights]
 
-    return {
-      learningText,
-      translationText
-    }
-  } catch (error) {
-    console.error(`Error with AI content generation for ${learningLanguage}:`, error)
+  return {
+    requestedLevel: config.level,
+    actualLevel: finalLevel,
+    levelMismatch,
+    levelDifference, // Positive means harder than requested, negative means easier
+    confidence: Math.round((Math.max(...Object.values(levelPercentages)) / 100) * 100), // Confidence based on dominant level
     
-    // Fallback content with dynamic language
-    const fallbackMap: Record<string, any> = {
-      de: {
-        text: `Ein kurzer Text über ${theme}. Hier sind einige wichtige Wörter: ${targetWordsList}. Dies ist ein Beispieltext für Übungszwecke.`,
-        translation: `A short text about ${theme}. Here are some important words: ${targetWordsList}. This is an example text for practice purposes.`
-      },
-      es: {
-        text: `Un texto corto sobre ${theme}. Aquí están algunas palabras importantes: ${targetWordsList}. Este es un texto de ejemplo para practicar.`,
-        translation: `A short text about ${theme}. Here are some important words: ${targetWordsList}. This is an example text for practice purposes.`
-      },
-      fr: {
-        text: `Un texte court sur ${theme}. Voici quelques mots importants: ${targetWordsList}. Ceci est un texte d'exemple à des fins de pratique.`,
-        translation: `A short text about ${theme}. Here are some important words: ${targetWordsList}. This is an example text for practice purposes.`
-      },
-      it: {
-        text: `Un testo breve su ${theme}. Ecco alcune parole importanti: ${targetWordsList}. Questo è un testo di esempio per la pratica.`,
-        translation: `A short text about ${theme}. Here are some important words: ${targetWordsList}. This is an example text for practice purposes.`
-      },
-      pt: {
-        text: `Um texto curto sobre ${theme}. Aqui estão algumas palavras importantes: ${targetWordsList}. Este é um texto de exemplo para prática.`,
-        translation: `A short text about ${theme}. Here are some important words: ${targetWordsList}. This is an example text for practice purposes.`
-      },
-      tr: {
-        text: `${theme} hakkında kısa bir metin. İşte bazı önemli kelimeler: ${targetWordsList}. Bu pratik amaçlı örnek bir metindir.`,
-        translation: `A short text about ${theme}. Here are some important words: ${targetWordsList}. This is an example text for practice purposes.`
-      },
-      nl: {
-        text: `Een korte tekst over ${theme}. Hier zijn enkele belangrijke woorden: ${targetWordsList}. Dit is een voorbeeldtekst voor oefening.`,
-        translation: `A short text about ${theme}. Here are some important words: ${targetWordsList}. This is an example text for practice purposes.`
-      },
-      sv: {
-        text: `En kort text om ${theme}. Här är några viktiga ord: ${targetWordsList}. Detta är en exempeltext för övning.`,
-        translation: `A short text about ${theme}. Here are some important words: ${targetWordsList}. This is an example text for practice purposes.`
-      },
-      no: {
-        text: `En kort tekst om ${theme}. Her er noen viktige ord: ${targetWordsList}. Dette er en eksempeltekst for øvelse.`,
-        translation: `A short text about ${theme}. Here are some important words: ${targetWordsList}. This is an example text for practice purposes.`
-      },
-      da: {
-        text: `En kort tekst om ${theme}. Her er nogle vigtige ord: ${targetWordsList}. Dette er en eksempeltekst til øvelse.`,
-        translation: `A short text about ${theme}. Here are some important words: ${targetWordsList}. This is an example text for practice purposes.`
-      },
-      fi: {
-        text: `Lyhyt teksti aiheesta ${theme}. Tässä on joitakin tärkeitä sanoja: ${targetWordsList}. Tämä on esimerkkiteksti harjoittelua varten.`,
-        translation: `A short text about ${theme}. Here are some important words: ${targetWordsList}. This is an example text for practice purposes.`
-      }
-    }
-
-    const fallback = fallbackMap[languageCode] || fallbackMap.de
+    vocabularyBreakdown: {
+      levelDistribution: levelCounts,
+      levelPercentages,
+      dominantLevel: Object.entries(levelPercentages).reduce((a, b) => 
+        levelPercentages[a[0]] > levelPercentages[b[0]] ? a : b
+      )[0]
+    },
     
-    return {
-      learningText: fallback.text,
-      translationText: fallback.translation
-    }
+    textComplexity,
+    
+    recommendations: generateLevelRecommendations(config.level, finalLevel, levelDifference, textComplexity)
   }
 }
 
-// Parse content and identify word positions (language-agnostic)
+// Generate recommendations based on level assessment
+function generateLevelRecommendations(
+  requestedLevel: string,
+  actualLevel: string,
+  levelDifference: number,
+  textComplexity: any
+) {
+  const recommendations = []
+
+  if (levelDifference > 1) {
+    recommendations.push({
+      type: 'difficulty_too_high',
+      message: `Content is significantly harder than ${requestedLevel}. Consider selecting fewer advanced words or choosing a different difficulty setting.`,
+      severity: 'high'
+    })
+  } else if (levelDifference > 0) {
+    recommendations.push({
+      type: 'difficulty_slightly_high',
+      message: `Content is slightly above ${requestedLevel} level. This can provide good challenge for learning.`,
+      severity: 'medium'
+    })
+  } else if (levelDifference < -1) {
+    recommendations.push({
+      type: 'difficulty_too_low',
+      message: `Content may be too easy for ${requestedLevel}. Try selecting more advanced categories or higher difficulty.`,
+      severity: 'medium'
+    })
+  }
+
+  if (textComplexity.averageSentenceLength > 25) {
+    recommendations.push({
+      type: 'sentence_complexity',
+      message: 'Sentences are quite complex. Break them down when reading for better comprehension.',
+      severity: 'low'
+    })
+  }
+
+  if (textComplexity.complexSentenceCount / textComplexity.totalSentences > 0.6) {
+    recommendations.push({
+      type: 'grammar_complexity',
+      message: 'High proportion of complex grammatical structures. Take time to analyze sentence structure.',
+      severity: 'medium'
+    })
+  }
+
+  return recommendations
+}
+
+// Parse content and identify word positions (enhanced)
 async function parseContentWithWordPositions(
   learningText: string,
-  targetWords: WordTarget[]
+  targetWords: any[]
 ) {
   const words: Array<{
     word: string
@@ -310,6 +502,7 @@ async function parseContentWithWordPositions(
     position: { start: number; end: number }
     familiarity: string
     showTranslation: boolean
+    type?: string
   }> = []
 
   const sentences = learningText.split(/[.!?]+/).filter(s => s.trim().length > 0)
@@ -320,8 +513,7 @@ async function parseContentWithWordPositions(
   )
 
   let currentPosition = 0
-  // Language-agnostic character handling for multiple European languages
-  const cleanText = learningText.replace(/[^\w\säöüßÄÖÜáéíóúñçàèéêëîïôùûüÿæøåğıİçşĞŞıÜÇİÖğüçşıöüÇĞIŞ]/g, ' ')
+  const cleanText = learningText.replace(/[^\w\sÄÖÜäöüß]/g, ' ')
   const textWords = cleanText.split(/\s+/).filter(w => w.length > 0)
 
   for (const word of textWords) {
@@ -340,7 +532,8 @@ async function parseContentWithWordPositions(
         isTarget: true,
         position: { start: startPos, end: endPos },
         familiarity: targetWord.familiarity,
-        showTranslation: !targetWord.isKnown && targetWord.practiceCount < 3
+        showTranslation: !targetWord.isKnown && targetWord.practiceCount < 3,
+        type: targetWord.type
       })
     } else {
       words.push({
@@ -362,21 +555,6 @@ async function parseContentWithWordPositions(
   }
 }
 
-// Calculate content difficulty score
-function calculateDifficultyScore(words: any[]): number {
-  const targetWords = words.filter(w => w.isTarget)
-  const unknownCount = targetWords.filter(w => w.familiarity === 'unknown').length
-  const learningCount = targetWords.filter(w => w.familiarity === 'learning').length
-  
-  const unknownRatio = unknownCount / Math.max(targetWords.length, 1)
-  const learningRatio = learningCount / Math.max(targetWords.length, 1)
-  
-  // Score from 1-10 (10 being hardest)
-  return Math.round(
-    (unknownRatio * 6) + (learningRatio * 3) + 1
-  )
-}
-
 export async function GET(request: NextRequest) {
   try {
     const session = await getServerSession(authOptions)
@@ -393,18 +571,35 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({
       success: true,
       availableStyles: [
-        { id: 'story', name: 'Story', description: 'Engaging narratives with characters and plot' },
-        { id: 'conversation', name: 'Conversation', description: 'Natural dialogues between people' },
+        { id: 'story', name: 'Story', description: 'Engaging narratives with character development' },
+        { id: 'dialogue-2', name: '2-Person Dialogue', description: 'Conversation between two people' },
+        { id: 'dialogue-3', name: '3-Person Dialogue', description: 'Three-way conversation' },
+        { id: 'dialogue-4', name: '4-Person Dialogue', description: 'Group discussion with four people' },
         { id: 'article', name: 'Article', description: 'Informative texts about topics' }
       ],
+      availableCategories: [
+        { id: 'VERB', name: 'Verbs', description: 'Action words and conjugations' },
+        { id: 'NOUN', name: 'Nouns', description: 'People, places, things' },
+        { id: 'ADJ', name: 'Adjectives', description: 'Descriptive words' },
+        { id: 'ADVERB', name: 'Adverbs', description: 'Modifying words' }
+      ],
+      availableTenses: [
+        { id: 'present', name: 'Present (Präsens)' },
+        { id: 'past', name: 'Simple Past (Präteritum)' },
+        { id: 'perfect', name: 'Present Perfect (Perfekt)' },
+        { id: 'pluperfect', name: 'Past Perfect (Plusquamperfekt)' },
+        { id: 'future', name: 'Future (Futur I)' },
+        { id: 'mixed', name: 'Mixed Tenses' }
+      ],
       supportedLevels: ['A1', 'A2', 'B1', 'B2', 'C1', 'C2'],
-      maxWords: 1500,
-      minWords: 80,
-      userLanguageSettings: languageSettings
+      maxWordsPerCategory: 20,
+      minWordsPerCategory: 1,
+      userLanguageSettings: languageSettings,
+      generationEngine: 'gemini-flash-2.5'
     })
 
   } catch (error) {
-    console.error('Error fetching content generation info:', error)
+    console.error('Error fetching enhanced content generation info:', error)
     return NextResponse.json(
       { error: 'Failed to fetch content generation info' },
       { status: 500 }

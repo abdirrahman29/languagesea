@@ -1,12 +1,35 @@
-name: Build and Publish Abood image to Docker Hub
+name: Build and Deploy Abood to Digital Ocean
 on:
   push:
     branches: [ main ]
+
 jobs:
-  build:
+  build-and-deploy:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0  # Fetch all history for version calculation
+    
+    - name: Calculate next version
+      id: version
+      run: |
+        # Get the latest tag or start with v3.9 if no tags exist
+        LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v3.8")
+        echo "Latest tag: $LATEST_TAG"
+        
+        # Extract version number and increment by 0.1
+        VERSION=$(echo $LATEST_TAG | sed 's/v//')
+        MAJOR=$(echo $VERSION | cut -d. -f1)
+        MINOR=$(echo $VERSION | cut -d. -f2)
+        
+        # Increment minor version by 1
+        NEW_MINOR=$((MINOR + 1))
+        NEW_VERSION="v${MAJOR}.${NEW_MINOR}"
+        
+        echo "New version: $NEW_VERSION"
+        echo "version=$NEW_VERSION" >> $GITHUB_OUTPUT
+        echo "version_number=${MAJOR}.${NEW_MINOR}" >> $GITHUB_OUTPUT
     
     - name: Log in to Docker Hub
       run: echo "${{ secrets.DOCKERHUB_TOKEN }}" | docker login -u "${{ secrets.DOCKERHUB_USERNAME }}" --password-stdin
@@ -16,10 +39,73 @@ jobs:
         echo "DATABASE_URL=${{ secrets.DATABASE_URL }}" >> .env
         echo "NEXTAUTH_SECRET=${{ secrets.NEXTAUTH_SECRET }}" >> .env
         echo "GROQ_API_KEY=${{ secrets.GROQ_API_KEY }}" >> .env
-   
+        echo "GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY }}" >> .env
     
     - name: Build and push the Docker image
       run: |
-        TAG=${{ secrets.DOCKERHUB_USERNAME }}/languagesea:v3.8
+        TAG=${{ secrets.DOCKERHUB_USERNAME }}/languagesea:${{ steps.version.outputs.version }}
+        echo "Building image with tag: $TAG"
         docker build . -t $TAG
         docker push $TAG
+        
+        # Also tag as latest
+        docker tag $TAG ${{ secrets.DOCKERHUB_USERNAME }}/languagesea:latest
+        docker push ${{ secrets.DOCKERHUB_USERNAME }}/languagesea:latest
+    
+    - name: Create Git tag
+      run: |
+        git config --local user.email "action@github.com"
+        git config --local user.name "GitHub Action"
+        git tag ${{ steps.version.outputs.version }}
+        git push origin ${{ steps.version.outputs.version }}
+    
+    - name: Deploy to Digital Ocean
+      uses: appleboy/ssh-action@v1.0.0
+      with:
+        host: ${{ secrets.DO_HOST }}
+        username: ${{ secrets.DO_USERNAME }}
+        key: ${{ secrets.DO_SSH_KEY }}
+        port: ${{ secrets.DO_PORT }}
+        script: |
+          # Navigate to your app directory
+          cd ~/language
+          
+          # Pull the latest image
+          echo "Pulling image: ${{ secrets.DOCKERHUB_USERNAME }}/languagesea:${{ steps.version.outputs.version }}"
+          docker pull ${{ secrets.DOCKERHUB_USERNAME }}/languagesea:${{ steps.version.outputs.version }}
+          
+          # Stop and remove the existing container
+          echo "Stopping existing container..."
+          docker stop languagesea-app || true
+          docker rm languagesea-app || true
+          
+          # Run the new container
+          echo "Starting new container with version ${{ steps.version.outputs.version }}"
+          docker run -d \
+            --name languagesea-app \
+            --restart unless-stopped \
+            -p 3000:3000 \
+            -e DATABASE_URL="${{ secrets.DATABASE_URL }}" \
+            -e NEXTAUTH_SECRET="${{ secrets.NEXTAUTH_SECRET }}" \
+            -e GROQ_API_KEY="${{ secrets.GROQ_API_KEY }}" \
+            -e GEMINI_API_KEY="${{ secrets.GEMINI_API_KEY }}" \
+            -e NODE_ENV=production \
+            ${{ secrets.DOCKERHUB_USERNAME }}/languagesea:${{ steps.version.outputs.version }}
+          
+          # Clean up unused images (keep last 3 versions)
+          echo "Cleaning up old images..."
+          docker images ${{ secrets.DOCKERHUB_USERNAME }}/languagesea --format "table {{.Tag}}\t{{.ID}}" | grep -E "^v[0-9]" | tail -n +4 | awk '{print $2}' | xargs -r docker rmi || true
+          docker image prune -f
+          
+          # Verify deployment
+          echo "Verifying deployment..."
+          sleep 10
+          if docker ps | grep -q languagesea-app; then
+            echo "✅ Deployment successful!"
+            echo "🚀 Version ${{ steps.version.outputs.version }} is now running"
+            docker ps | grep languagesea-app
+          else
+            echo "❌ Deployment failed!"
+            docker logs languagesea-app --tail 50
+            exit 1
+          fi

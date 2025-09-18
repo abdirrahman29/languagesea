@@ -1,14 +1,18 @@
 "use client"
 
 import { useState, useEffect } from "react"
-import { Settings, BookOpen, MessageCircle, Newspaper, Target, Zap, RefreshCw, AlignLeft, AlignCenter, AlignRight, FileText, Tag } from "lucide-react"
+import { Settings, BookOpen, MessageCircle, Newspaper, Target, Zap, RefreshCw, Users, Clock, Tag, FileText, CheckCircle2, ArrowRight, ArrowLeft, AlignLeft, AlignCenter, AlignRight } from "lucide-react"
 import { cn } from "@/lib/utils"
+import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 
 const AVAILABLE_LEVELS = ['A1', 'A2', 'B1', 'B2', 'C1', 'C2'];
-const CONTENT_LENGTHS = [
-  { id: 'short', label: 'Short', wordCount: 80, description: '~80-120 words', icon: AlignLeft },
-  { id: 'medium', label: 'Medium', wordCount: 320, description: '~320-780 words', icon: AlignCenter },
-  { id: 'long', label: 'Long', wordCount: 1080, description: '~1080-1450 words', icon: AlignRight },
+const WORD_CATEGORIES = [
+  { id: 'VERB', name: 'Verbs', icon: '🔴', description: 'Action words and their conjugations' },
+  { id: 'NOUN', name: 'Nouns', icon: '🔵', description: 'People, places, things' },
+  { id: 'ADJ', name: 'Adjectives', icon: '🟡', description: 'Descriptive words' },
+  { id: 'ADVERB', name: 'Adverbs', icon: '🟣', description: 'Modifying words' }
 ];
 
 const CONTENT_STYLES = [
@@ -16,23 +20,53 @@ const CONTENT_STYLES = [
     id: 'story' as const,
     name: 'Story',
     icon: BookOpen,
-    description: 'Engaging narratives and tales',
-    color: 'bg-purple-100 text-purple-800 border-purple-200'
+    description: 'Engaging narratives with plot development'
   },
   {
-    id: 'conversation' as const,
-    name: 'Dialogue',
-    icon: MessageCircle,
-    description: 'Natural conversations and chats',
-    color: 'bg-blue-100 text-blue-800 border-blue-200'
+    id: 'dialogue-2' as const,
+    name: '2-Person Dialogue',
+    icon: Users,
+    description: 'Conversation between two people'
+  },
+  {
+    id: 'dialogue-3' as const,
+    name: '3-Person Dialogue',
+    icon: Users,
+    description: 'Conversation between three people'
+  },
+  {
+    id: 'dialogue-4' as const,
+    name: '4-Person Dialogue',
+    icon: Users,
+    description: 'Group conversation with four people'
   },
   {
     id: 'article' as const,
     name: 'Article',
     icon: Newspaper,
-    description: 'Informative articles and news',
-    color: 'bg-green-100 text-green-800 border-green-200'
+    description: 'Informative articles and reports'
   }
+];
+
+const CONTENT_LENGTHS = [
+  { id: 'short', label: 'Short', wordCount: 80, description: '~80-120 words', icon: AlignLeft },
+  { id: 'medium', label: 'Medium', wordCount: 320, description: '~320-480 words', icon: AlignCenter },
+  { id: 'long', label: 'Long', wordCount: 800, description: '~800-1200 words', icon: AlignRight },
+];
+
+const DIFFICULTY_LEVELS = [
+  { id: 'easy', name: 'Easy', description: 'Simple sentences, basic vocabulary', color: 'bg-green-100 text-green-800' },
+  { id: 'medium', name: 'Medium', description: 'Moderate complexity, mixed structures', color: 'bg-yellow-100 text-yellow-800' },
+  { id: 'hard', name: 'Hard', description: 'Complex sentences, advanced grammar', color: 'bg-red-100 text-red-800' }
+];
+
+const GERMAN_TENSES = [
+  { id: 'present', name: 'Present (Präsens)', description: 'Current actions and states' },
+  { id: 'past', name: 'Simple Past (Präteritum)', description: 'Completed past actions' },
+  { id: 'perfect', name: 'Present Perfect (Perfekt)', description: 'Actions completed in the past with present relevance' },
+  { id: 'pluperfect', name: 'Past Perfect (Plusquamperfekt)', description: 'Actions completed before another past action' },
+  { id: 'future', name: 'Future (Futur I)', description: 'Future actions and intentions' },
+  { id: 'mixed', name: 'Mixed Tenses', description: 'Practice with multiple tenses' }
 ];
 
 interface SavedText {
@@ -43,446 +77,784 @@ interface SavedText {
 }
 
 interface PracticeSettingsProps {
-  currentTheme: string
-  currentStyle: 'conversation' | 'article' | 'story'
-  autoDetectedLevel: string
-  currentLevelSetting: string
-  targetWordCount: number
   themes: Array<{ name: string; wordCount: number }>
   savedTexts: SavedText[]
-  onThemeChange: (theme: string) => void
-  onStyleChange: (style: 'conversation' | 'article' | 'story') => void
-  onLevelSettingChange: (level: string) => void
-  onTargetWordCountChange: (count: number) => void
-  onStartSession: () => void
-  currentLength: number
-  onLengthChange: (length: number) => void
+  onStartSession: (config: PracticeConfiguration) => void
   isGenerating: boolean
   className?: string
-  practiceSource: 'themes' | 'saved-texts'
-  onPracticeSourceChange: (source: 'themes' | 'saved-texts') => void
-  selectedSavedTexts: string[]
-  onSelectedSavedTextsChange: (textIds: string[]) => void
 }
 
-export default function PracticeSettings({
-  currentTheme,
-  currentStyle,
-  autoDetectedLevel,
-  currentLevelSetting,
-  targetWordCount,
-  themes = [], // Default to empty array
-  savedTexts = [], // Default to empty array
-  onThemeChange,
-  onStyleChange,
-  onTargetWordCountChange,
+interface DynamicOptions {
+  availableLevels: string[]
+  availableThemes: Array<{ 
+    name: string; 
+    wordCount: number; 
+    levels: string[];
+    id?: string;
+    description?: string;
+  }>
+  categoryStats: Record<string, { 
+    totalWords: number; 
+    levelDistribution: Record<string, number> 
+  }>
+}
+
+export interface PracticeConfiguration {
+  // Step 1: Categories
+  selectedCategories: string[]
+  
+  // Step 2: Level and source
+  level: string
+  practiceSource: 'themes' | 'saved-texts'
+  selectedTheme?: string
+  selectedSavedTexts?: string[]
+  
+  // Step 3: Word counts per category
+  wordCounts: Record<string, number>
+  
+  // Step 4: Content style
+  contentStyle: string
+  
+  // Step 5: Tense focus
+  tenseFocus: string[]
+  
+  // Step 6: Content length
+  length: number
+  
+  // Step 7: Overall difficulty
+  difficulty: 'easy' | 'medium' | 'hard'
+}
+
+export default function EnhancedPracticeSettings({
+  themes = [],
+  savedTexts = [],
   onStartSession,
-  onLevelSettingChange,
-  currentLength,
-  onLengthChange,
   isGenerating,
-  className,
-  practiceSource,
-  onPracticeSourceChange,
-  selectedSavedTexts = [], // Default to empty array
-  onSelectedSavedTextsChange
+  className
 }: PracticeSettingsProps) {
-  const [isExpanded, setIsExpanded] = useState(false)
-  const [customWordCount, setCustomWordCount] = useState(targetWordCount)
-  const [isLoadingSavedTexts, setIsLoadingSavedTexts] = useState(false)
-  const effectiveLevel = currentLevelSetting === 'auto' ? autoDetectedLevel : currentLevelSetting
+  const [currentStep, setCurrentStep] = useState(1)
+  const [config, setConfig] = useState<PracticeConfiguration>({
+    selectedCategories: [],
+    level: 'A1',
+    practiceSource: 'themes',
+    wordCounts: {},
+    contentStyle: 'story',
+    tenseFocus: ['present'],
+    length: 320,
+    difficulty: 'medium'
+  })
+  
+  // Dynamic options based on actual data
+  const [dynamicOptions, setDynamicOptions] = useState<DynamicOptions>({
+    availableLevels: [],
+    availableThemes: [],
+    categoryStats: {}
+  })
+  const [isLoadingOptions, setIsLoadingOptions] = useState(false)
 
-  // Ensure we have valid arrays
-  const safeThemes = Array.isArray(themes) ? themes : []
-  const safeSavedTexts = Array.isArray(savedTexts) ? savedTexts : []
-  const safeSelectedSavedTexts = Array.isArray(selectedSavedTexts) ? selectedSavedTexts : []
-
-  // Calculate max available words based on current source
-  const maxAvailableWords = practiceSource === 'themes' 
-    ? safeThemes.find(t => t.name === currentTheme)?.wordCount || 0
-    : safeSelectedSavedTexts.length > 0 
-      ? safeSelectedSavedTexts.reduce((total, textId) => {
-          const text = safeSavedTexts.find(t => t.id === textId)
-          return total + (text?.wordCount || 0)
-        }, 0)
-      : 0
-
-  // Generate word count options based on available words
-  const getWordCountOptions = (maxWords: number) => {
-    const presetOptions = [5, 10, 15, 20, 30, 50].filter(count => count <= maxWords)
-    
-    // Add max available option if it's not already included
-    if (maxWords > 50 && !presetOptions.includes(maxWords)) {
-      presetOptions.push(maxWords)
-    }
-    
-    return presetOptions.map(count => ({
-      count,
-      label: `${count} words`,
-      description: count === maxWords ? 'All available' : `${count} vocabulary words`
-    }))
-  }
-
-  const wordCountOptions = getWordCountOptions(maxAvailableWords)
-
-  const handleSavedTextSelection = (textId: string, selected: boolean) => {
-    if (selected) {
-      onSelectedSavedTextsChange([...safeSelectedSavedTexts, textId])
-    } else {
-      onSelectedSavedTextsChange(safeSelectedSavedTexts.filter(id => id !== textId))
-    }
-  }
-
-  // Load saved texts when switching to saved-texts mode
+  // Load dynamic options when categories or source change
   useEffect(() => {
-    if (practiceSource === 'saved-texts' && safeSavedTexts.length === 0) {
-      setIsLoadingSavedTexts(true)
-      // This would typically trigger a fetch in the parent component
-      // You might want to pass a callback for this
-      setTimeout(() => setIsLoadingSavedTexts(false), 1000) // Temporary
+    const loadDynamicOptions = async () => {
+      if (config.selectedCategories.length === 0) {
+        setDynamicOptions({
+          availableLevels: [],
+          availableThemes: [],
+          categoryStats: {}
+        })
+        return
+      }
+
+      setIsLoadingOptions(true)
+      try {
+        const params = new URLSearchParams({
+          source: config.practiceSource,
+          categories: config.selectedCategories.join(',')
+        })
+
+        const response = await fetch(`/api/practice/get-available-options?${params}`)
+        if (response.ok) {
+          const data = await response.json()
+          setDynamicOptions(data)
+          
+          // Auto-select first available level if current level is not available
+          if (data.availableLevels.length > 0 && !data.availableLevels.includes(config.level)) {
+            setConfig(prev => ({ ...prev, level: data.availableLevels[0] }))
+          }
+          
+          // Auto-select first available theme if none selected
+          if (data.availableThemes.length > 0 && config.practiceSource === 'themes' && !config.selectedTheme) {
+            const firstTheme = data.availableThemes[0]
+            setConfig(prev => ({ 
+              ...prev, 
+              selectedTheme: firstTheme.name 
+            }))
+          }
+        }
+      } catch (error) {
+        console.error('Failed to load dynamic options:', error)
+      } finally {
+        setIsLoadingOptions(false)
+      }
     }
-  }, [practiceSource, safeSavedTexts.length])
 
-  return (
-    <div className={cn("bg-white border border-gray-200 rounded-lg shadow-sm", className)}>
-      {/* Header */}
-      <div className="flex items-center justify-between p-4 border-b border-gray-200">
-        <div className="flex items-center gap-2">
-          <Settings size={20} className="text-gray-600" />
-          <h3 className="font-semibold text-gray-900">Practice Settings</h3>
-        </div>
-        <button
-          onClick={() => setIsExpanded(!isExpanded)}
-          className="text-sm text-blue-600 hover:text-blue-800"
-        >
-          {isExpanded ? 'Hide' : 'Customize'}
-        </button>
-      </div>
+    loadDynamicOptions()
+  }, [config.selectedCategories, config.practiceSource])
 
-      {/* Quick Start */}
-      {!isExpanded && (
-        <div className="p-4">
-          <div className="space-y-3">
-            <div className="flex items-center justify-between text-sm">
-              <span className="text-gray-600">Source:</span>
-              <span className="font-medium text-gray-900 capitalize">
-                {practiceSource === 'themes' ? currentTheme : `${safeSelectedSavedTexts.length} texts selected`}
-              </span>
-            </div>
-            <div className="flex items-center justify-between text-sm">
-              <span className="text-gray-600">Style:</span>
-              <span className="font-medium text-gray-900 capitalize">{currentStyle}</span>
-            </div>
-            <div className="flex items-center justify-between text-sm">
-              <span className="text-gray-600">Level:</span>
-              <span className="px-2 py-1 bg-blue-100 text-blue-800 rounded text-xs font-medium">
-                {currentLevelSetting === 'auto' ? `Auto (${autoDetectedLevel})` : `Manual (${currentLevelSetting})`}
-              </span>
-            </div>
-            <div className="flex items-center justify-between text-sm">
-              <span className="text-gray-600">Words:</span>
-              <span className="font-medium text-gray-900">{targetWordCount} / {maxAvailableWords}</span>
-            </div>
-          </div>
-        </div>
-      )}
+  // Filter themes/texts based on selected level
+  const getFilteredThemes = () => {
+    return dynamicOptions.availableThemes.filter(theme => 
+      theme.levels.includes(config.level)
+    )
+  }
 
-      {/* Detailed Settings */}
-      {isExpanded && (
-        <div className="p-4 space-y-6">
-          {/* Practice Source Selection */}
-          <div>
-            <label className="block text-sm font-semibold text-gray-700 mb-3">
-              Practice Source
-            </label>
-            <div className="grid grid-cols-2 gap-3">
-              <button
-                onClick={() => onPracticeSourceChange('themes')}
-                className={cn(
-                  "flex items-center gap-3 p-3 rounded-lg border-2 text-left transition-all",
-                  practiceSource === 'themes'
-                    ? "border-blue-500 bg-blue-50 text-blue-900"
-                    : "border-gray-200 hover:border-gray-300 hover:bg-gray-50"
-                )}
-              >
+  // Step navigation
+  const totalSteps = 7
+  const canProceed = () => {
+    switch (currentStep) {
+      case 1: return config.selectedCategories.length > 0
+      case 2: return config.practiceSource === 'themes' ? !!config.selectedTheme : (config.selectedSavedTexts?.length || 0) > 0
+      case 3: return config.selectedCategories.every(cat => config.wordCounts[cat] > 0)
+      case 4: return !!config.contentStyle
+      case 5: return config.tenseFocus.length > 0
+      case 6: return !!config.length
+      case 7: return !!config.difficulty
+      default: return false
+    }
+  }
+
+  const nextStep = () => {
+    if (canProceed() && currentStep < totalSteps) {
+      setCurrentStep(currentStep + 1)
+    }
+  }
+
+  const prevStep = () => {
+    if (currentStep > 1) {
+      setCurrentStep(currentStep - 1)
+    }
+  }
+
+  const handleCategoryToggle = (categoryId: string) => {
+    const newCategories = config.selectedCategories.includes(categoryId)
+      ? config.selectedCategories.filter(id => id !== categoryId)
+      : [...config.selectedCategories, categoryId]
+    
+    setConfig({
+      ...config,
+      selectedCategories: newCategories,
+      // Reset word counts when categories change
+      wordCounts: Object.fromEntries(
+        newCategories.map(cat => [cat, config.wordCounts[cat] || 5])
+      )
+    })
+  }
+
+  const handleWordCountChange = (category: string, count: number) => {
+    setConfig({
+      ...config,
+      wordCounts: {
+        ...config.wordCounts,
+        [category]: Math.max(1, Math.min(20, count))
+      }
+    })
+  }
+
+  const handleTenseToggle = (tenseId: string) => {
+    const newTenses = config.tenseFocus.includes(tenseId)
+      ? config.tenseFocus.filter(id => id !== tenseId)
+      : [...config.tenseFocus, tenseId]
+    
+    setConfig({
+      ...config,
+      tenseFocus: newTenses.length > 0 ? newTenses : ['present'] // Always keep at least one tense
+    })
+  }
+
+  const renderStep = () => {
+    switch (currentStep) {
+      case 1:
+        return (
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
                 <Tag size={20} />
-                <div>
-                  <div className="font-medium">Themes</div>
-                  <div className="text-sm opacity-80">Practice by topic</div>
-                </div>
-              </button>
-              
-              <button
-                onClick={() => onPracticeSourceChange('saved-texts')}
-                className={cn(
-                  "flex items-center gap-3 p-3 rounded-lg border-2 text-left transition-all",
-                  practiceSource === 'saved-texts'
-                    ? "border-blue-500 bg-blue-50 text-blue-900"
-                    : "border-gray-200 hover:border-gray-300 hover:bg-gray-50"
-                )}
-              >
-                <FileText size={20} />
-                <div>
-                  <div className="font-medium">Saved Texts</div>
-                  <div className="text-sm opacity-80">Practice from your texts</div>
-                </div>
-              </button>
-            </div>
-          </div>
-
-          {/* Theme/Text Selection */}
-          {practiceSource === 'themes' ? (
-            <div>
-              <label className="block text-sm font-semibold text-gray-700 mb-3">
-                Choose Theme
-              </label>
-              {safeThemes.length === 0 ? (
-                <div className="p-4 text-center text-gray-500 border border-gray-200 rounded-lg">
-                  No themes available
-                </div>
-              ) : (
-                <select
-                  value={currentTheme}
-                  onChange={(e) => onThemeChange(e.target.value)}
-                  className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                >
-                  {safeThemes.map((theme) => (
-                    <option key={theme.name} value={theme.name}>
-                      {theme.name} ({theme.wordCount} words available)
-                    </option>
-                  ))}
-                </select>
-              )}
-            </div>
-          ) : (
-            <div>
-              <label className="block text-sm font-semibold text-gray-700 mb-3">
-                Select Saved Texts ({safeSelectedSavedTexts.length} selected)
-              </label>
-              <div className="max-h-48 overflow-y-auto border border-gray-300 rounded-lg">
-                {isLoadingSavedTexts ? (
-                  <div className="p-4 text-center text-gray-500">
-                    <RefreshCw size={16} className="animate-spin inline mr-2" />
-                    Loading saved texts...
-                  </div>
-                ) : safeSavedTexts.length === 0 ? (
-                  <div className="p-4 text-center text-gray-500">
-                    <div>No saved texts available.</div>
-                    <div className="text-xs mt-1">Process some texts first.</div>
-                    <div className="text-xs text-blue-600 mt-2">
-                      Debug: practiceSource={practiceSource}, safeSavedTexts.length={safeSavedTexts.length}
-                    </div>
-                  </div>
-                ) : (
-                  <>
-                    <div className="p-2 text-xs text-gray-600 bg-gray-50 border-b">
-                      Found {safeSavedTexts.length} texts with practice words
-                    </div>
-                    {safeSavedTexts.map((text) => (
-                      <label key={text.id} className="flex items-center gap-3 p-3 hover:bg-gray-50 cursor-pointer border-b border-gray-100 last:border-b-0">
-                        <input
-                          type="checkbox"
-                          checked={safeSelectedSavedTexts.includes(text.id)}
-                          onChange={(e) => handleSavedTextSelection(text.id, e.target.checked)}
-                          className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-                        />
-                        <div className="flex-1">
-                          <div className="font-medium text-sm">{text.title}</div>
-                          <div className="text-xs text-gray-500">
-                            {text.wordCount} practice words
-                            {text.level && ` • ${text.level}`}
-                            {text.totalWords && ` • ${text.totalWords} total`}
-                          </div>
-                        </div>
-                      </label>
-                    ))}
-                  </>
-                )}
-              </div>
-            </div>
-          )}
-
-          {/* Content Style */}
-          <div>
-            <label className="block text-sm font-semibold text-gray-700 mb-3">
-              Content Style
-            </label>
-            <div className="grid grid-cols-1 gap-3">
-              {CONTENT_STYLES.map((style) => {
-                const Icon = style.icon
-                const isSelected = currentStyle === style.id
-                
-                return (
-                  <button
-                    key={style.id}
-                    onClick={() => onStyleChange(style.id)}
+                Step 1: Select Word Categories
+              </CardTitle>
+              <CardDescription>
+                Choose which types of words you want to practice. You can select multiple categories.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {WORD_CATEGORIES.map((category) => (
+                  <div
+                    key={category.id}
                     className={cn(
-                      "flex items-center gap-3 p-3 rounded-lg border-2 text-left transition-all",
-                      isSelected 
-                        ? `${style.color} border-current` 
-                        : "border-gray-200 hover:border-gray-300 hover:bg-gray-50"
-                    )}
-                  >
-                    <Icon size={20} className={isSelected ? "text-current" : "text-gray-500"} />
-                    <div>
-                      <div className={cn("font-medium", isSelected ? "text-current" : "text-gray-900")}>
-                        {style.name}
-                      </div>
-                      <div className={cn("text-sm", isSelected ? "text-current opacity-80" : "text-gray-500")}>
-                        {style.description}
-                      </div>
-                    </div>
-                  </button>
-                )
-              })}
-            </div>
-          </div>
-
-          {/* Content Length */}
-          <div>
-            <label className="block text-sm font-semibold text-gray-700 mb-3">
-              Content Length
-            </label>
-            <div className="grid grid-cols-3 gap-2">
-              {CONTENT_LENGTHS.map((lengthOpt) => {
-                const isSelected = currentLength === lengthOpt.wordCount
-                return (
-                  <button
-                    key={lengthOpt.id}
-                    onClick={() => onLengthChange(lengthOpt.wordCount)}
-                    className={cn(
-                      "flex flex-col items-center justify-center p-3 rounded-lg border-2 text-center transition-all",
-                      isSelected
+                      "p-4 border-2 rounded-lg cursor-pointer transition-all",
+                      config.selectedCategories.includes(category.id)
                         ? "border-blue-500 bg-blue-50 text-blue-900"
                         : "border-gray-200 hover:border-gray-300 hover:bg-gray-50"
                     )}
-                    title={lengthOpt.description}
+                    onClick={() => handleCategoryToggle(category.id)}
                   >
-                    <lengthOpt.icon size={20} className="mb-1" />
-                    <span className="font-medium text-sm">{lengthOpt.label}</span>
-                  </button>
-                )
-              })}
-            </div>
-          </div>
+                    <div className="flex items-center gap-3">
+                      <span className="text-2xl">{category.icon}</span>
+                      <div>
+                        <h3 className="font-semibold">{category.name}</h3>
+                        <p className="text-sm opacity-75">{category.description}</p>
+                      </div>
+                      {config.selectedCategories.includes(category.id) && (
+                        <CheckCircle2 size={20} className="ml-auto text-blue-600" />
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+              {config.selectedCategories.length > 0 && (
+                <div className="mt-4 p-3 bg-green-50 border border-green-200 rounded-lg">
+                  <p className="text-green-800 text-sm">
+                    Selected: {config.selectedCategories.map(id => 
+                      WORD_CATEGORIES.find(cat => cat.id === id)?.name
+                    ).join(', ')}
+                  </p>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        )
 
-          {/* Target Word Count */}
-          <div>
-            <label className="block text-sm font-semibold text-gray-700 mb-3 flex items-center gap-2">
-              <Target size={16} />
-              Words to Practice (Max: {maxAvailableWords})
-            </label>
-            
-            {maxAvailableWords > 0 ? (
-              <>
-                {/* Preset options */}
-                <div className="grid grid-cols-2 gap-2 mb-3">
-                  {wordCountOptions.map((option) => (
-                    <button
-                      key={option.count}
-                      onClick={() => onTargetWordCountChange(option.count)}
+      case 2:
+        return (
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Target size={20} />
+                Step 2: Choose Level & Source
+              </CardTitle>
+              <CardDescription>
+                Select your learning level and where to get the practice words from.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-6">
+              {/* Level Selection - Dynamic based on available data */}
+              <div>
+                <div className="flex items-center justify-between mb-3">
+                  <h3 className="font-semibold">Learning Level</h3>
+                  {isLoadingOptions && (
+                    <div className="text-xs text-gray-500">Loading available levels...</div>
+                  )}
+                </div>
+                
+                {dynamicOptions.availableLevels.length === 0 ? (
+                  <div className="p-4 border-2 border-dashed border-gray-300 rounded-lg text-center">
+                    <p className="text-gray-500 text-sm">
+                      Select word categories first to see available levels
+                    </p>
+                  </div>
+                ) : (
+                  <div>
+                    <div className="flex flex-wrap gap-2 mb-3">
+                      {dynamicOptions.availableLevels.map(level => (
+                        <button
+                          key={level}
+                          onClick={() => setConfig({...config, level})}
+                          className={cn(
+                            "px-4 py-2 rounded-lg border-2 transition-all",
+                            config.level === level
+                              ? "border-blue-500 bg-blue-50 text-blue-900"
+                              : "border-gray-200 hover:border-gray-300"
+                          )}
+                        >
+                          {level}
+                        </button>
+                      ))}
+                    </div>
+                    
+                    {/* Level Statistics */}
+                    <div className="text-xs text-gray-600 space-y-1">
+                      <div>Available words in {config.level}:</div>
+                      {Object.entries(dynamicOptions.categoryStats).map(([category, stats]) => (
+                        <div key={category} className="flex justify-between">
+                          <span>{category}:</span>
+                          <span>{stats.levelDistribution[config.level] || 0} words</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Source Selection */}
+              <div>
+                <h3 className="font-semibold mb-3">Practice Source</h3>
+                <div className="grid grid-cols-2 gap-4">
+                  <button
+                    onClick={() => setConfig({...config, practiceSource: 'themes'})}
+                    className={cn(
+                      "p-4 border-2 rounded-lg text-left transition-all",
+                      config.practiceSource === 'themes'
+                        ? "border-blue-500 bg-blue-50 text-blue-900"
+                        : "border-gray-200 hover:border-gray-300"
+                    )}
+                  >
+                    <Tag size={20} className="mb-2" />
+                    <div className="font-semibold">Themes</div>
+                    <div className="text-sm opacity-75">Practice by topic</div>
+                    {dynamicOptions.availableThemes.length > 0 && config.practiceSource === 'themes' && (
+                      <div className="text-xs mt-1 opacity-60">
+                        {dynamicOptions.availableThemes.length} themes available
+                      </div>
+                    )}
+                  </button>
+                  
+                  <button
+                    onClick={() => setConfig({...config, practiceSource: 'saved-texts'})}
+                    className={cn(
+                      "p-4 border-2 rounded-lg text-left transition-all",
+                      config.practiceSource === 'saved-texts'
+                        ? "border-blue-500 bg-blue-50 text-blue-900"
+                        : "border-gray-200 hover:border-gray-300"
+                    )}
+                  >
+                    <FileText size={20} className="mb-2" />
+                    <div className="font-semibold">Saved Texts</div>
+                    <div className="text-sm opacity-75">Practice from your texts</div>
+                    {dynamicOptions.availableThemes.length > 0 && config.practiceSource === 'saved-texts' && (
+                      <div className="text-xs mt-1 opacity-60">
+                        {dynamicOptions.availableThemes.length} texts available
+                      </div>
+                    )}
+                  </button>
+                </div>
+              </div>
+
+              {/* Theme/Text Selection - Filtered by level */}
+              {config.practiceSource === 'themes' ? (
+                <div>
+                  <h3 className="font-semibold mb-3">
+                    Select Theme (Level {config.level})
+                  </h3>
+                  {isLoadingOptions ? (
+                    <div className="p-4 border border-gray-300 rounded-lg text-center text-gray-500">
+                      Loading themes...
+                    </div>
+                  ) : (
+                    <div>
+                      {getFilteredThemes().length === 0 ? (
+                        <div className="p-4 border-2 border-dashed border-yellow-300 bg-yellow-50 rounded-lg text-center">
+                          <p className="text-yellow-800 text-sm">
+                            No themes available for level {config.level} with selected categories.
+                            <br />Try selecting a different level or different categories.
+                          </p>
+                        </div>
+                      ) : (
+                        <select
+                          value={config.selectedTheme || ''}
+                          onChange={(e) => setConfig({...config, selectedTheme: e.target.value})}
+                          className="w-full p-3 border border-gray-300 rounded-lg"
+                        >
+                          <option value="">Choose a theme...</option>
+                          {getFilteredThemes().map((theme) => (
+                            <option key={theme.name} value={theme.name}>
+                              {theme.name} ({theme.wordCount} words, levels: {theme.levels.join(', ')})
+                            </option>
+                          ))}
+                        </select>
+                      )}
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div>
+                  <h3 className="font-semibold mb-3">
+                    Select Saved Texts (Level {config.level})
+                  </h3>
+                  {isLoadingOptions ? (
+                    <div className="p-4 border border-gray-300 rounded-lg text-center text-gray-500">
+                      Loading saved texts...
+                    </div>
+                  ) : (
+                    <div className="max-h-48 overflow-y-auto border border-gray-300 rounded-lg">
+                      {getFilteredThemes().length === 0 ? (
+                        <div className="p-4 text-center text-yellow-600 bg-yellow-50">
+                          <div>No saved texts available for level {config.level} with selected categories.</div>
+                          <div className="text-xs mt-1">Try a different level or process more texts.</div>
+                        </div>
+                      ) : (
+                        <>
+                          <div className="p-2 text-xs text-gray-600 bg-gray-50 border-b">
+                            Found {getFilteredThemes().length} texts with {config.level} level words
+                          </div>
+                          {getFilteredThemes().map((text) => (
+                            <label key={text.id || text.name} className="flex items-center gap-3 p-3 hover:bg-gray-50 cursor-pointer border-b border-gray-100 last:border-b-0">
+                              <input
+                                type="checkbox"
+                                checked={config.selectedSavedTexts?.includes(text.id || text.name) || false}
+                                onChange={(e) => {
+                                  const currentTexts = config.selectedSavedTexts || []
+                                  const textId = text.id || text.name
+                                  const newTexts = e.target.checked
+                                    ? [...currentTexts, textId]
+                                    : currentTexts.filter(id => id !== textId)
+                                  setConfig({...config, selectedSavedTexts: newTexts})
+                                }}
+                                className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                              />
+                              <div className="flex-1">
+                                <div className="font-medium text-sm">{text.name}</div>
+                                <div className="text-xs text-gray-500">
+                                  {text.wordCount} words • Levels: {text.levels.join(', ')}
+                                  {text.description && ` • ${text.description}`}
+                                </div>
+                              </div>
+                            </label>
+                          ))}
+                        </>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        )
+
+      case 3:
+        return (
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Target size={20} />
+                Step 3: Words per Category
+              </CardTitle>
+              <CardDescription>
+                Set how many words you want to practice for each selected category.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="space-y-4">
+                {config.selectedCategories.map(categoryId => {
+                  const category = WORD_CATEGORIES.find(cat => cat.id === categoryId)
+                  return (
+                    <div key={categoryId} className="flex items-center justify-between p-4 border border-gray-200 rounded-lg">
+                      <div className="flex items-center gap-3">
+                        <span className="text-xl">{category?.icon}</span>
+                        <div>
+                          <div className="font-semibold">{category?.name}</div>
+                          <div className="text-sm text-gray-500">{category?.description}</div>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={() => handleWordCountChange(categoryId, (config.wordCounts[categoryId] || 5) - 1)}
+                          className="w-8 h-8 flex items-center justify-center border border-gray-300 rounded hover:bg-gray-50"
+                        >
+                          -
+                        </button>
+                        <span className="w-8 text-center font-semibold">
+                          {config.wordCounts[categoryId] || 5}
+                        </span>
+                        <button
+                          onClick={() => handleWordCountChange(categoryId, (config.wordCounts[categoryId] || 5) + 1)}
+                          className="w-8 h-8 flex items-center justify-center border border-gray-300 rounded hover:bg-gray-50"
+                        >
+                          +
+                        </button>
+                      </div>
+                    </div>
+                  )
+                })}
+                <div className="p-3 bg-blue-50 border border-blue-200 rounded-lg">
+                  <p className="text-blue-800 text-sm">
+                    Total words: {Object.values(config.wordCounts).reduce((sum, count) => sum + (count || 0), 0)}
+                  </p>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        )
+
+      case 4:
+        return (
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <BookOpen size={20} />
+                Step 4: Content Style
+              </CardTitle>
+              <CardDescription>
+                Choose what type of content you want to generate for practice.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                {CONTENT_STYLES.map((style) => {
+                  const Icon = style.icon
+                  return (
+                    <div
+                      key={style.id}
                       className={cn(
-                        "p-3 rounded-lg border-2 text-left transition-all",
-                        targetWordCount === option.count
+                        "p-4 border-2 rounded-lg cursor-pointer transition-all",
+                        config.contentStyle === style.id
                           ? "border-blue-500 bg-blue-50 text-blue-900"
                           : "border-gray-200 hover:border-gray-300 hover:bg-gray-50"
                       )}
+                      onClick={() => setConfig({...config, contentStyle: style.id})}
                     >
-                      <div className="font-medium">{option.label}</div>
-                      <div className="text-xs text-gray-500">{option.description}</div>
-                    </button>
-                  ))}
-                </div>
+                      <Icon size={24} className="mb-2" />
+                      <h3 className="font-semibold mb-1">{style.name}</h3>
+                      <p className="text-sm opacity-75">{style.description}</p>
+                      {config.contentStyle === style.id && (
+                        <CheckCircle2 size={16} className="mt-2 text-blue-600" />
+                      )}
+                    </div>
+                  )
+                })}
+              </div>
+            </CardContent>
+          </Card>
+        )
 
-                {/* Custom input */}
+      case 5:
+        return (
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Clock size={20} />
+                Step 5: Tense Focus
+              </CardTitle>
+              <CardDescription>
+                Select which tenses you want to focus on in your practice.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="space-y-3">
+                {GERMAN_TENSES.map((tense) => (
+                  <div
+                    key={tense.id}
+                    className={cn(
+                      "p-4 border-2 rounded-lg cursor-pointer transition-all",
+                      config.tenseFocus.includes(tense.id)
+                        ? "border-blue-500 bg-blue-50 text-blue-900"
+                        : "border-gray-200 hover:border-gray-300 hover:bg-gray-50"
+                    )}
+                    onClick={() => handleTenseToggle(tense.id)}
+                  >
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <h3 className="font-semibold">{tense.name}</h3>
+                        <p className="text-sm opacity-75">{tense.description}</p>
+                      </div>
+                      {config.tenseFocus.includes(tense.id) && (
+                        <CheckCircle2 size={20} className="text-blue-600" />
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+              {config.tenseFocus.length > 0 && (
+                <div className="mt-4 p-3 bg-green-50 border border-green-200 rounded-lg">
+                  <p className="text-green-800 text-sm">
+                    Selected tenses: {config.tenseFocus.map(id => 
+                      GERMAN_TENSES.find(tense => tense.id === id)?.name
+                    ).join(', ')}
+                  </p>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        )
+
+      case 6:
+        return (
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <AlignCenter size={20} />
+                Step 6: Content Length
+              </CardTitle>
+              <CardDescription>
+                Choose how long you want the practice content to be.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                {CONTENT_LENGTHS.map((lengthOption) => {
+                  const Icon = lengthOption.icon
+                  const isSelected = config.length === lengthOption.wordCount
+                  return (
+                    <div
+                      key={lengthOption.id}
+                      className={cn(
+                        "p-4 border-2 rounded-lg cursor-pointer transition-all text-center",
+                        isSelected
+                          ? "border-blue-500 bg-blue-50 text-blue-900"
+                          : "border-gray-200 hover:border-gray-300 hover:bg-gray-50"
+                      )}
+                      onClick={() => setConfig({...config, length: lengthOption.wordCount})}
+                    >
+                      <Icon size={24} className="mx-auto mb-2" />
+                      <h3 className="font-semibold mb-1">{lengthOption.label}</h3>
+                      <p className="text-sm opacity-75 mb-2">{lengthOption.description}</p>
+                      <div className="text-xs font-medium">{lengthOption.wordCount} words</div>
+                      {isSelected && (
+                        <CheckCircle2 size={16} className="mx-auto mt-2 text-blue-600" />
+                      )}
+                    </div>
+                  )
+                })}
+              </div>
+              
+              {/* Custom length option */}
+              <div className="mt-6 p-4 bg-gray-50 rounded-lg">
+                <h4 className="font-medium mb-2">Custom Length</h4>
                 <div className="flex items-center gap-2">
                   <input
                     type="number"
-                    min="1"
-                    max={maxAvailableWords}
-                    value={customWordCount}
+                    min="50"
+                    max="2000"
+                    value={config.length}
                     onChange={(e) => {
-                      const value = Math.min(Math.max(1, parseInt(e.target.value) || 1), maxAvailableWords)
-                      setCustomWordCount(value)
+                      const value = Math.min(Math.max(50, parseInt(e.target.value) || 50), 2000)
+                      setConfig({...config, length: value})
                     }}
                     className="flex-1 p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                    placeholder="Custom amount"
+                    placeholder="Enter word count"
                   />
-                  <button
-                    onClick={() => onTargetWordCountChange(customWordCount)}
-                    className="px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition-colors"
-                  >
-                    Set
-                  </button>
+                  <span className="text-sm text-gray-600">words</span>
                 </div>
+                <p className="text-xs text-gray-500 mt-1">
+                  Range: 50-2000 words. Longer content provides more context but takes more time to complete.
+                </p>
+              </div>
+            </CardContent>
+          </Card>
+        )
+
+      case 7:
+        return (
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Zap size={20} />
+                Step 7: Overall Difficulty
+              </CardTitle>
+              <CardDescription>
+                Set the overall complexity and difficulty of the generated content.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="space-y-4">
+                {DIFFICULTY_LEVELS.map((difficulty) => (
+                  <div
+                    key={difficulty.id}
+                    className={cn(
+                      "p-4 border-2 rounded-lg cursor-pointer transition-all",
+                      config.difficulty === difficulty.id
+                        ? "border-blue-500 bg-blue-50 text-blue-900"
+                        : "border-gray-200 hover:border-gray-300 hover:bg-gray-50"
+                    )}
+                    onClick={() => setConfig({...config, difficulty: difficulty.id as 'easy' | 'medium' | 'hard'})}
+                  >
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-3">
+                        <Badge className={difficulty.color}>{difficulty.name}</Badge>
+                        <div>
+                          <h3 className="font-semibold">{difficulty.name} Difficulty</h3>
+                          <p className="text-sm opacity-75">{difficulty.description}</p>
+                        </div>
+                      </div>
+                      {config.difficulty === difficulty.id && (
+                        <CheckCircle2 size={20} className="text-blue-600" />
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+              
+              <div className="mt-4 p-3 bg-blue-50 border border-blue-200 rounded-lg">
+                <div className="text-sm text-blue-800">
+                  <strong>Selected:</strong> {DIFFICULTY_LEVELS.find(d => d.id === config.difficulty)?.name} difficulty
+                </div>
+                <div className="text-xs text-blue-700 mt-1">
+                  This affects sentence structure, vocabulary complexity, and grammatical constructions beyond your target words.
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        )
+
+      default:
+        return null
+    }
+  }
+
+  return (
+    <div className={cn("space-y-6", className)}>
+      {/* Progress Indicator */}
+      <div className="flex items-center justify-between">
+        <h2 className="text-lg font-semibold">Practice Configuration</h2>
+        <div className="flex items-center gap-2">
+          {Array.from({ length: totalSteps }, (_, i) => (
+            <div
+              key={i}
+              className={cn(
+                "w-8 h-8 rounded-full flex items-center justify-center text-sm font-medium",
+                i + 1 < currentStep
+                  ? "bg-green-500 text-white"
+                  : i + 1 === currentStep
+                  ? "bg-blue-500 text-white"
+                  : "bg-gray-200 text-gray-600"
+              )}
+            >
+              {i + 1 < currentStep ? <CheckCircle2 size={16} /> : i + 1}
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Current Step Content */}
+      {renderStep()}
+
+      {/* Navigation */}
+      <div className="flex justify-between">
+        <Button
+          variant="outline"
+          onClick={prevStep}
+          disabled={currentStep === 1}
+          className="flex items-center gap-2"
+        >
+          <ArrowLeft size={16} />
+          Previous
+        </Button>
+
+        {currentStep === totalSteps ? (
+          <Button
+            onClick={() => onStartSession(config)}
+            disabled={!canProceed() || isGenerating}
+            className="flex items-center gap-2"
+          >
+            {isGenerating ? (
+              <>
+                <RefreshCw size={16} className="animate-spin" />
+                Generating...
               </>
             ) : (
-              <div className="p-4 text-center text-gray-500 border border-gray-200 rounded-lg">
-                No words available for practice
-              </div>
+              <>
+                <Zap size={16} />
+                Start Practice
+              </>
             )}
-          </div>
-
-          {/* Level Setting */}
-          <div>
-            <label className="block text-sm font-semibold text-gray-700 mb-2">
-              Learning Level
-            </label>
-            <select
-              value={currentLevelSetting}
-              onChange={(e) => onLevelSettingChange(e.target.value)}
-              className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-            >
-              <option value="auto">
-                Auto-detect ({autoDetectedLevel})
-              </option>
-              {AVAILABLE_LEVELS.map(level => (
-                <option key={level} value={level}>
-                  {level}
-                </option>
-              ))}
-            </select>
-            <p className="text-xs text-gray-500 mt-1">
-              "Auto" uses your vocabulary history. Manual selection can adjust difficulty.
-            </p>
-          </div>
-        </div>
-      )}
-
-      {/* Start Button */}
-      <div className="p-4 border-t border-gray-200">
-        <button
-          onClick={onStartSession}
-          disabled={isGenerating || maxAvailableWords === 0}
-          className={cn(
-            "w-full py-3 px-4 rounded-lg font-semibold transition-all flex items-center justify-center gap-2",
-            isGenerating || maxAvailableWords === 0
-              ? "bg-gray-100 text-gray-400 cursor-not-allowed"
-              : "bg-blue-600 text-white hover:bg-blue-700 active:bg-blue-800"
-          )}
-        >
-          {isGenerating ? (
-            <>
-              <RefreshCw size={20} className="animate-spin" />
-              Generating Content...
-            </>
-          ) : maxAvailableWords === 0 ? (
-            <>
-              <BookOpen size={20} />
-              No Words Available
-            </>
-          ) : (
-            <>
-              <BookOpen size={20} />
-              Start Practice Session
-            </>
-          )}
-        </button>
-        
-        {!isGenerating && maxAvailableWords > 0 && (
-          <p className="text-center text-xs text-gray-500 mt-2">
-            AI will generate personalized content with {targetWordCount} words from your selection
-          </p>
+          </Button>
+        ) : (
+          <Button
+            onClick={nextStep}
+            disabled={!canProceed()}
+            className="flex items-center gap-2"
+          >
+            Next
+            <ArrowRight size={16} />
+          </Button>
         )}
       </div>
     </div>
