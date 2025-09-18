@@ -250,11 +250,19 @@ export default function EnhancedPracticeSettings({
   }
 
   const handleWordCountChange = (category: string, count: number) => {
+    // Get available word count for this category
+    const categoryStats = dynamicOptions.categoryStats[category]
+    const availableWords = categoryStats?.levelDistribution[config.level] || 0
+    const maxWords = Math.min(availableWords, 20) // Cap at 20 max
+    
+    // Ensure count is within valid range
+    const validCount = Math.max(1, Math.min(maxWords, count))
+    
     setConfig({
       ...config,
       wordCounts: {
         ...config.wordCounts,
-        [category]: Math.max(1, Math.min(20, count))
+        [category]: validCount
       }
     })
   }
@@ -519,60 +527,102 @@ export default function EnhancedPracticeSettings({
           </Card>
         )
 
-      case 3:
-        return (
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <Target size={20} />
-                Step 3: Words per Category
-              </CardTitle>
-              <CardDescription>
-                Set how many words you want to practice for each selected category.
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              <div className="space-y-4">
-                {config.selectedCategories.map(categoryId => {
-                  const category = WORD_CATEGORIES.find(cat => cat.id === categoryId)
-                  return (
-                    <div key={categoryId} className="flex items-center justify-between p-4 border border-gray-200 rounded-lg">
-                      <div className="flex items-center gap-3">
-                        <span className="text-xl">{category?.icon}</span>
-                        <div>
-                          <div className="font-semibold">{category?.name}</div>
-                          <div className="text-sm text-gray-500">{category?.description}</div>
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <button
-                          onClick={() => handleWordCountChange(categoryId, (config.wordCounts[categoryId] || 5) - 1)}
-                          className="w-8 h-8 flex items-center justify-center border border-gray-300 rounded hover:bg-gray-50"
-                        >
-                          -
-                        </button>
-                        <span className="w-8 text-center font-semibold">
-                          {config.wordCounts[categoryId] || 5}
-                        </span>
-                        <button
-                          onClick={() => handleWordCountChange(categoryId, (config.wordCounts[categoryId] || 5) + 1)}
-                          className="w-8 h-8 flex items-center justify-center border border-gray-300 rounded hover:bg-gray-50"
-                        >
-                          +
-                        </button>
-                      </div>
+      // Replace lines 544-586 in practice-settings.tsx case 3:
+case 3:
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <Target size={20} />
+          Step 3: Words per Category
+        </CardTitle>
+        <CardDescription>
+          Set how many words you want to practice for each selected category.
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        <div className="space-y-4">
+          {config.selectedCategories.map(categoryId => {
+            const category = WORD_CATEGORIES.find(cat => cat.id === categoryId)
+            
+            // Get available word count for this category
+            const categoryStats = dynamicOptions.categoryStats[categoryId]
+            const availableWords = categoryStats?.levelDistribution[config.level] || 0
+            const maxWords = Math.min(availableWords, 20) // Cap at 20 max
+            const currentCount = config.wordCounts[categoryId] || Math.min(5, maxWords)
+            
+            return (
+              <div key={categoryId} className="flex items-center justify-between p-4 border border-gray-200 rounded-lg">
+                <div className="flex items-center gap-3">
+                  <span className="text-xl">{category?.icon}</span>
+                  <div>
+                    <div className="font-semibold">{category?.name}</div>
+                    <div className="text-sm text-gray-500">{category?.description}</div>
+                    {/* NEW: Show available word count */}
+                    <div className="text-xs text-blue-600 mt-1">
+                      {availableWords > 0 
+                        ? `${availableWords} available in ${config.level}${config.practiceSource === 'themes' && config.selectedTheme ? ` (${config.selectedTheme})` : ''}`
+                        : 'No words available for this level'
+                      }
                     </div>
-                  )
-                })}
-                <div className="p-3 bg-blue-50 border border-blue-200 rounded-lg">
-                  <p className="text-blue-800 text-sm">
-                    Total words: {Object.values(config.wordCounts).reduce((sum, count) => sum + (count || 0), 0)}
-                  </p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => handleWordCountChange(categoryId, Math.max(1, currentCount - 1))}
+                    disabled={currentCount <= 1}
+                    className="w-8 h-8 flex items-center justify-center border border-gray-300 rounded hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    -
+                  </button>
+                  <span className="w-12 text-center font-semibold">
+                    {currentCount}
+                  </span>
+                  <button
+                    onClick={() => handleWordCountChange(categoryId, Math.min(maxWords, currentCount + 1))}
+                    disabled={currentCount >= maxWords || availableWords === 0}
+                    className="w-8 h-8 flex items-center justify-center border border-gray-300 rounded hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    +
+                  </button>
+                  {/* NEW: Max button to set to maximum available */}
+                  {maxWords > currentCount && (
+                    <button
+                      onClick={() => handleWordCountChange(categoryId, maxWords)}
+                      className="px-2 py-1 text-xs bg-blue-100 text-blue-800 rounded hover:bg-blue-200"
+                    >
+                      Max ({maxWords})
+                    </button>
+                  )}
                 </div>
               </div>
-            </CardContent>
-          </Card>
-        )
+            )
+          })}
+          <div className="p-3 bg-blue-50 border border-blue-200 rounded-lg">
+            <p className="text-blue-800 text-sm">
+              Total words: {Object.values(config.wordCounts).reduce((sum, count) => sum + (count || 0), 0)}
+            </p>
+            {/* NEW: Show breakdown by category with available counts */}
+            <div className="text-xs text-blue-700 mt-2 space-y-1">
+              {config.selectedCategories.map(categoryId => {
+                const category = WORD_CATEGORIES.find(cat => cat.id === categoryId)
+                const categoryStats = dynamicOptions.categoryStats[categoryId]
+                const availableWords = categoryStats?.levelDistribution[config.level] || 0
+                const selectedCount = config.wordCounts[categoryId] || 0
+                
+                return (
+                  <div key={categoryId} className="flex justify-between">
+                    <span>{category?.name}:</span>
+                    <span>{selectedCount}/{availableWords} available</span>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  )
 
       case 4:
         return (
