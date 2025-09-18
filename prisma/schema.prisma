@@ -97,7 +97,7 @@ model Verb {
   // Language specification
   language                String          @default("German")
   languageCode            String          @default("de")
-  
+  inThemes            ThemeCategoryWord[]
   conjugations            VerbConjugation[]
   practicedBy             PracticedWord[]
   extractedInTexts        ExtractedWord[]
@@ -123,7 +123,7 @@ model Noun {
   coOccurrenceBitmask     String?
   bigramsAndPositionHex   String?
   dateAdded               DateTime        @default(now())
-  
+  inThemes            ThemeCategoryWord[]
   // Language specification
   language                String          @default("German")
   languageCode            String          @default("de")
@@ -151,7 +151,7 @@ model Adjective {
   coOccurrenceBitmask     String?
   bigramsAndPositionHex   String?
   dateAdded               DateTime            @default(now())
-  
+  inThemes            ThemeCategoryWord[]
   // Language specification
   language                String              @default("German")
   languageCode            String              @default("de")
@@ -190,7 +190,7 @@ model Adverb {
   coOccurrenceBitmask     String?
   bigramsAndPositionHex   String?
   dateAdded               DateTime        @default(now())
-  
+  inThemes            ThemeCategoryWord[]
   // Language specification
   language                String          @default("German")
   languageCode            String          @default("de")
@@ -340,4 +340,15 @@ model ThemeCategoryWord {
   gender          String?
   language        String        @default("German")
   languageCode    String        @default("de")
+   verbId        Int?
+  verb          Verb?       @relation(fields: [verbId], references: [id])
+
+  nounId        Int?
+  noun          Noun?       @relation(fields: [nounId], references: [id])
+
+  adjectiveId   Int?
+  adjective     Adjective?  @relation(fields: [adjectiveId], references: [id])
+
+  adverbId      Int?
+  adverb        Adverb?     @relation(fields: [adverbId], references: [id])
 }
