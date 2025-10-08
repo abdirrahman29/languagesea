@@ -22,6 +22,15 @@ const DEFAULT_MODEL = GROQ_MODELS.LLAMA_33_70B
 
 // Language-specific configurations
 const LANGUAGE_CONFIGS = {
+  en: {
+    name: 'English',
+    hasGender: false,
+    hasCases: false,
+    hasConjugations: true,
+    verbEnding: 'e|ed|ing',
+    commonVerbs: ['be', 'have', 'do', 'say', 'go', 'get', 'make', 'know', 'think', 'take'],
+    grammarFeatures: ['conjugations']
+  },
   de: {
     name: 'German',
     hasGender: true,

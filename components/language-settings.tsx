@@ -14,6 +14,7 @@ import { toast } from "sonner"
 import { useSession } from "next-auth/react"
 
 const SUPPORTED_LANGUAGES = [
+  { code: 'en', name: 'English', flag: '🇬🇧' },  // Add this line
   { code: 'de', name: 'German', flag: '🇩🇪' },
   { code: 'es', name: 'Spanish', flag: '🇪🇸' },
   { code: 'fr', name: 'French', flag: '🇫🇷' },
